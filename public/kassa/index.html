@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Касса и склад</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Касса и склад для магазина аксессуаров для телефонов: продажи, приход, возвраты, инвентаризация и отчёты.">
+<meta name="theme-color" content="#eef1f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a0f1c" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Касса">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Onest:wght@400;500;600;700&family=Unbounded:wght@500;600&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app" lang="ru">
+  <header class="topbar">
+    <button class="icon-btn" id="back" data-act="back" aria-label="Назад" hidden></button>
+    <div class="title-wrap"><div class="eyebrow" id="eyebrow"></div><h1 id="title">Касса и склад</h1></div>
+    <button class="who" id="who" data-act="switchUser" aria-label="Сменить сотрудника на кассе"></button>
+  </header>
+  <main class="view" id="view"></main>
+</div>
+
+<div class="checkout-bar" id="bar" hidden></div>
+<nav class="tabbar" aria-label="Разделы"><div class="tabbar-inner"><div class="tabs" id="tabs"></div><span class="tab-ind" id="tab-ind" aria-hidden="true"></span></div></nav>
+
+<div class="layer" id="sheet" hidden>
+  <div class="backdrop" data-act="closeSheet"></div>
+  <div class="sheet" role="dialog" aria-modal="true"><div class="grip"></div><div id="sheet-body"></div></div>
+</div>
+
+<div class="layer dialog-layer" id="dialog" hidden>
+  <div class="backdrop" data-act="dialogCancel"></div>
+  <div class="dialog" id="dialog-box" role="alertdialog" aria-modal="true"></div>
+</div>
+
+<div class="scan-layer" id="scan" hidden role="dialog" aria-modal="true" aria-labelledby="scan-title">
+  <div class="scan-top"><h2 id="scan-title">Сканер</h2><button class="icon-btn" id="scan-x" data-act="scanClose" aria-label="Закрыть сканер"></button></div>
+  <div class="scan-view">
+    <video id="scan-video" playsinline muted autoplay></video>
+    <div class="scan-frame"><div class="scan-laser"></div></div>
+    <div class="scan-status" id="scan-status"></div>
+  </div>
+  <div class="scan-bottom">
+    <div class="scan-last" id="scan-last" aria-live="polite"></div>
+    <div class="search-row">
+      <input class="input mono" id="scan-manual" inputmode="numeric" enterkeyhint="done" autocomplete="off" placeholder="Цифры кода + Enter" aria-label="Штрих-код вручную" data-enter="scanManual">
+      <label class="btn file-btn"><span id="scan-photo-ico"></span>Фото<input type="file" accept="image/*" capture="environment" data-ch="scanPhoto" aria-label="Сфотографировать штрих-код"></label>
+    </div>
+    <button class="btn btn-primary" id="scan-done" data-act="scanClose">Готово</button>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<noscript><p style="padding: 16px">Для работы приложения включите JavaScript.</p></noscript>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -3,6 +3,16 @@
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CustomerController;
+use App\Http\Controllers\Api\Kassa\AuditController as KassaAudits;
+use App\Http\Controllers\Api\Kassa\AuthController as KassaAuth;
+use App\Http\Controllers\Api\Kassa\BootstrapController as KassaBootstrap;
+use App\Http\Controllers\Api\Kassa\EmployeeController as KassaEmployees;
+use App\Http\Controllers\Api\Kassa\IncomeController as KassaIncomes;
+use App\Http\Controllers\Api\Kassa\ProductController as KassaProducts;
+use App\Http\Controllers\Api\Kassa\RefundController as KassaRefunds;
+use App\Http\Controllers\Api\Kassa\ReportController as KassaReports;
+use App\Http\Controllers\Api\Kassa\SaleController as KassaSales;
+use App\Http\Controllers\Api\Kassa\StoreController as KassaStore;
 use App\Http\Controllers\Api\PaymentWebhookController;
 use App\Http\Controllers\Api\PosApiController;
 use App\Http\Controllers\Api\ProductController;
@@ -135,6 +145,65 @@ Route::prefix('v1')->group(function () {
             Route::post('/transactions/sync', [PosApiController::class, 'syncTransactions'])->name('api.pos.transactions.sync');
             Route::get('/transactions', [PosApiController::class, 'transactions'])->name('api.pos.transactions');
             Route::get('/transactions/{transaction}', [PosApiController::class, 'transactionDetail'])->name('api.pos.transactions.show');
+        });
+    });
+});
+
+/*
+|--------------------------------------------------------------------------
+| «Касса и склад» (public/kassa) — /api/kassa
+|--------------------------------------------------------------------------
+|
+| Сотрудники входят по PIN и получают Bearer-токен (kassa.auth).
+| Все суммы, остатки и отчёты считаются на сервере.
+|
+*/
+Route::prefix('kassa')->name('kassa.')->group(function () {
+    Route::get('/options', [KassaAuth::class, 'options'])->middleware('throttle:kassa-public')->name('options');
+    Route::post('/setup', [KassaAuth::class, 'setup'])->middleware('throttle:kassa-setup')->name('setup');
+    Route::post('/login', [KassaAuth::class, 'login'])->middleware('throttle:kassa-login')->name('login');
+
+    Route::middleware(['kassa.auth', 'throttle:kassa-api'])->group(function () {
+        Route::post('/logout', [KassaAuth::class, 'logout'])->name('logout');
+        Route::get('/bootstrap', KassaBootstrap::class)->name('bootstrap');
+
+        Route::get('/dashboard', [KassaReports::class, 'dashboard'])->name('dashboard');
+        Route::get('/reports', [KassaReports::class, 'show'])->name('reports');
+        Route::get('/journal', [KassaReports::class, 'journal'])->name('journal');
+
+        Route::get('/products', [KassaProducts::class, 'index'])->name('products.index');
+        Route::get('/products/barcode', [KassaProducts::class, 'barcode'])->name('products.barcode');
+        Route::get('/products/{product}', [KassaProducts::class, 'show'])->whereNumber('product')->name('products.show');
+        Route::post('/products', [KassaProducts::class, 'store'])->name('products.store');
+        Route::put('/products/{product}', [KassaProducts::class, 'update'])->whereNumber('product')->name('products.update');
+
+        Route::get('/sales', [KassaSales::class, 'index'])->name('sales.index');
+        Route::get('/sales/{sale}', [KassaSales::class, 'show'])->whereNumber('sale')->name('sales.show');
+        Route::post('/sales', [KassaSales::class, 'store'])->name('sales.store');
+
+        Route::get('/returns', [KassaRefunds::class, 'index'])->name('returns.index');
+        Route::get('/returns/{refund}', [KassaRefunds::class, 'show'])->whereNumber('refund')->name('returns.show');
+        Route::post('/returns', [KassaRefunds::class, 'store'])->name('returns.store');
+
+        Route::get('/incomes', [KassaIncomes::class, 'index'])->name('incomes.index');
+        Route::get('/incomes/{income}', [KassaIncomes::class, 'show'])->whereNumber('income')->name('incomes.show');
+        Route::post('/incomes', [KassaIncomes::class, 'store'])->name('incomes.store');
+
+        Route::get('/audits', [KassaAudits::class, 'index'])->name('audits.index');
+        Route::get('/audits/{audit}', [KassaAudits::class, 'show'])->whereNumber('audit')->name('audits.show');
+        Route::post('/audits', [KassaAudits::class, 'store'])->name('audits.store');
+
+        Route::get('/employees', [KassaEmployees::class, 'index'])->name('employees.index');
+        Route::get('/employees/{employee}', [KassaEmployees::class, 'show'])->whereNumber('employee')->name('employees.show');
+
+        Route::middleware('kassa.owner')->group(function () {
+            Route::delete('/products/{product}', [KassaProducts::class, 'destroy'])->whereNumber('product')->name('products.destroy');
+            Route::post('/employees', [KassaEmployees::class, 'store'])->name('employees.store');
+            Route::put('/employees/{employee}', [KassaEmployees::class, 'update'])->whereNumber('employee')->name('employees.update');
+            Route::post('/employees/{employee}/toggle', [KassaEmployees::class, 'toggle'])->whereNumber('employee')->name('employees.toggle');
+            Route::put('/store', [KassaStore::class, 'update'])->name('store.update');
+            Route::post('/data/demo', [KassaStore::class, 'demo'])->name('data.demo');
+            Route::post('/data/wipe', [KassaStore::class, 'wipe'])->name('data.wipe');
         });
     });
 });

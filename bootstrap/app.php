@@ -1,8 +1,10 @@
 <?php
 
+use App\Http\Middleware\AuthenticateKassa;
 use App\Http\Middleware\EnforceAbsoluteSessionLifetime;
 use App\Http\Middleware\EnsureActiveCashierShift;
 use App\Http\Middleware\EnsureBotGuard;
+use App\Http\Middleware\EnsureKassaOwner;
 use App\Http\Middleware\EnsureNotInstalled;
 use App\Http\Middleware\EnsurePublicRegistrationEnabled;
 use App\Http\Middleware\EnsureRecentPasswordConfirmation;
@@ -52,6 +54,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'setup.notinstalled' => EnsureNotInstalled::class,
             'step_up' => EnsureRecentPasswordConfirmation::class,
             'abilities' => CheckAbilities::class,
+            'kassa.auth' => AuthenticateKassa::class,
+            'kassa.owner' => EnsureKassaOwner::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
