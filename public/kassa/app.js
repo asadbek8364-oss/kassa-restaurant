@@ -382,6 +382,7 @@
     if (line) line.qty++;
     else S.cart.items.unshift({ pid, qty: 1 });
     U.flash = pid;
+    U.flashNew = !line;
     save();
     return { ok: true, msg: '+1 ' + p.name, p };
   }
@@ -426,6 +427,13 @@
     save();
     render();
     openReceipt(sale.id, true);
+    chime();
+    setTimeout(() => {
+      const c = $('.ok-check');
+      if (!c) return;
+      const b = c.getBoundingClientRect();
+      burst(b.left + b.width / 2, b.top + b.height / 2);
+    }, 520);
   }
 
   function addIncomeLine(pid) {
@@ -543,19 +551,30 @@
   function lockScroll() {
     document.body.style.overflow = !$('#sheet').hidden || !$('#scan').hidden ? 'hidden' : '';
   }
+  let sheetTimer = 0;
   function openSheet(content) {
     const layer = $('#sheet');
+    clearTimeout(sheetTimer);
+    layer.classList.remove('closing');
     setHTML($('#sheet-body'), content);
     layer.hidden = false;
     $('.sheet', layer).scrollTop = 0;
     lockScroll();
+    enterAnim($('#sheet-body .sheet-body'), 8);
   }
   function closeSheet() {
     const layer = $('#sheet');
-    if (layer.hidden) return;
-    layer.hidden = true;
-    setHTML($('#sheet-body'), '');
-    lockScroll();
+    if (layer.hidden || layer.classList.contains('closing')) return;
+    const done = () => {
+      clearTimeout(sheetTimer);
+      layer.classList.remove('closing');
+      layer.hidden = true;
+      setHTML($('#sheet-body'), '');
+      lockScroll();
+    };
+    if (reduceMotion()) { done(); return; }
+    layer.classList.add('closing');
+    sheetTimer = setTimeout(done, 240);
   }
   const sheetHead = (title, sub) => html`<div class="sheet-h"><div><h2>${title}</h2>${sub ? html`<div class="sec-sub">${sub}</div>` : ''}</div><button class="icon-btn" data-act="closeSheet" aria-label="Закрыть">${ic('x')}</button></div>`;
 
@@ -649,6 +668,163 @@
     try { if (navigator.vibrate) navigator.vibrate(40); } catch (e) { /* без вибрации */ }
   }
 
+  function chime() {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const t = audioCtx.currentTime;
+      [[880, 0], [1318.5, 0.09]].forEach(([f, d]) => {
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.type = 'sine';
+        o.frequency.value = f;
+        g.gain.setValueAtTime(0.0001, t + d);
+        g.gain.exponentialRampToValueAtTime(0.09, t + d + 0.015);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.38);
+        o.connect(g);
+        g.connect(audioCtx.destination);
+        o.start(t + d);
+        o.stop(t + d + 0.42);
+      });
+    } catch (e) { /* без звука */ }
+    try { if (navigator.vibrate) navigator.vibrate([30, 50, 30]); } catch (e) { /* без вибрации */ }
+  }
+
+  // ---------------------------------------------------------------- Анимации
+  // Все эффекты выключаются, если в системе включено «уменьшить движение».
+  const reduceMotion = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+  const memo = new Map(); // последние показанные значения: числа, длины полос, положения переключателей
+  const FMT = { num, compact };
+  const restartAnim = (el, cls) => { if (!el) return; el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); };
+
+  // Числа плавно досчитываются, полосы и столбики растут от прошлого значения, плашка переключателя скользит.
+  function fx(root) {
+    if (!root) return;
+    const calm = reduceMotion();
+    root.querySelectorAll('[data-count]').forEach((el) => {
+      const to = Number(el.dataset.count);
+      const key = el.dataset.key;
+      const fmt = FMT[el.dataset.fmt] || num;
+      const from = memo.has(key) ? memo.get(key) : 0;
+      memo.set(key, to);
+      if (calm || from === to) return;
+      const dur = Math.min(1150, 480 + Math.log10(Math.abs(to - from) + 1) * 75);
+      const t0 = performance.now();
+      el.textContent = fmt(from);
+      const step = (now) => {
+        if (!el.isConnected) return;
+        const k = Math.min(1, (now - t0) / dur);
+        el.textContent = fmt(from + (to - from) * easeOut(k));
+        if (k < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    });
+    const plan = [];
+    root.querySelectorAll('[data-grow]').forEach((el) => {
+      const key = el.dataset.grow;
+      const prop = el.dataset.prop || 'width';
+      const to = Number(el.dataset.to);
+      const from = memo.has(key) ? memo.get(key) : 0;
+      memo.set(key, to);
+      if (calm || from === to) return;
+      el.style.transition = 'none';
+      el.style[prop] = from + '%';
+      plan.push(() => { el.style.transition = ''; el.style[prop] = to + '%'; });
+    });
+    root.querySelectorAll('[data-seg]').forEach((el) => {
+      const key = 'seg-' + el.dataset.seg;
+      const to = Number(el.dataset.i);
+      const from = memo.has(key) ? memo.get(key) : to;
+      memo.set(key, to);
+      const pill = el.querySelector('.seg-pill');
+      if (calm || !pill || from === to) return;
+      pill.style.transition = 'none';
+      el.style.setProperty('--i', from);
+      plan.push(() => { pill.style.transition = ''; el.style.setProperty('--i', to); });
+    });
+    if (plan.length) {
+      void root.offsetWidth;
+      plan.forEach((f) => f());
+    }
+  }
+
+  // Каскадное появление блоков экрана и строк внутри них.
+  function enterAnim(root, max) {
+    if (!root || reduceMotion()) return;
+    const rise = (el, delay) => { el.style.setProperty('--d', delay + 'ms'); el.classList.add('rise'); };
+    Array.from(root.children).slice(0, max || 10).forEach((el, i) => {
+      const base = i * 55;
+      rise(el, base);
+      el.querySelectorAll('.rows > *, .qa > *, .tiles > *, .menu-grid > *, .kpis > *').forEach((c, j) => {
+        if (j < 10) rise(c, base + 80 + j * 34);
+      });
+    });
+  }
+
+  // «+1» перелетает по дуге из нажатого товара к итогу чека.
+  function flyTo(from, toEl) {
+    if (!from || !toEl || reduceMotion() || !document.body.animate) return;
+    const to = toEl.getBoundingClientRect();
+    const x0 = from.left + from.width / 2, y0 = from.top + from.height / 2;
+    const x1 = to.left + to.width / 2, y1 = to.top + to.height / 2;
+    const cx = (x0 + x1) / 2, cy = Math.min(y0, y1) - 110;
+    const frames = [];
+    for (let k = 0; k <= 12; k++) {
+      const t = k / 12;
+      const x = (1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * cx + t * t * x1;
+      const y = (1 - t) * (1 - t) * y0 + 2 * (1 - t) * t * cy + t * t * y1;
+      frames.push({ transform: `translate(${x - x0}px, ${y - y0}px) scale(${1 - 0.5 * t})`, opacity: t < 0.85 ? 1 : 0.3 });
+    }
+    const dot = document.createElement('div');
+    dot.className = 'fly';
+    dot.textContent = '+1';
+    dot.style.left = x0 + 'px';
+    dot.style.top = y0 + 'px';
+    document.body.appendChild(dot);
+    dot.animate(frames, { duration: 640, easing: 'cubic-bezier(.45,0,.55,1)' }).onfinish = () => {
+      dot.remove();
+      if (toEl.isConnected) toEl.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.14)' }, { transform: 'scale(1)' }], { duration: 340, easing: 'cubic-bezier(.3,1.6,.5,1)' });
+    };
+  }
+
+  // Конфетти из галочки после пробитого чека.
+  function burst(x, y) {
+    if (reduceMotion() || !document.body.animate) return;
+    const colors = ['var(--accent)', 'var(--teal)', 'var(--warn)', 'var(--good)'];
+    const n = 28;
+    for (let i = 0; i < n; i++) {
+      const p = document.createElement('i');
+      p.className = 'confetti' + (i % 3 === 0 ? ' round' : '');
+      p.style.left = x + 'px';
+      p.style.top = y + 'px';
+      p.style.background = colors[i % colors.length];
+      document.body.appendChild(p);
+      const ang = (Math.PI * 2 * i) / n + Math.random() * 0.35;
+      const dist = 55 + Math.random() * 75;
+      const dx = Math.cos(ang) * dist, dy = Math.sin(ang) * dist - 24;
+      const rot = (Math.random() - 0.5) * 600;
+      p.animate([
+        { transform: 'translate(-50%, -50%) scale(.3) rotate(0deg)', opacity: 1 },
+        { transform: `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px)) scale(1) rotate(${rot / 2}deg)`, opacity: 1, offset: 0.5 },
+        { transform: `translate(calc(-50% + ${dx * 1.2}px), calc(-50% + ${dy + 80}px)) scale(.7) rotate(${rot}deg)`, opacity: 0 },
+      ], { duration: 950 + Math.random() * 450, easing: 'cubic-bezier(.2,.7,.3,1)' }).onfinish = () => p.remove();
+    }
+  }
+
+  function shake(el) {
+    if (!el || reduceMotion() || !el.animate) return;
+    el.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-7px)' }, { transform: 'translateX(6px)' }, { transform: 'translateX(-3px)' }, { transform: 'translateX(0)' }], { duration: 340, easing: 'ease-out' });
+  }
+
+  // Плавная перестановка карточек (View Transitions API), где браузер это умеет.
+  function withVT(fn) {
+    if (!document.startViewTransition || reduceMotion()) { fn(); return; }
+    let vt;
+    try { vt = document.startViewTransition(fn); } catch (e) { fn(); return; }
+    // пропущенный или прерванный переход — не ошибка: DOM всё равно обновлён
+    ['ready', 'finished', 'updateCallbackDone'].forEach((k) => { if (vt && vt[k]) vt[k].catch(() => {}); });
+  }
+
   const Scan = {
     opts: null, stream: null, timer: 0, reader: null, last: '', lastAt: 0, live: false,
     async open(opts) {
@@ -712,6 +888,7 @@
       this.last = code;
       this.lastAt = now;
       beep();
+      if (!reduceMotion()) restartAnim($('.scan-frame'), 'hit');
       const o = this.opts;
       if (!o.continuous) {
         this.close();
@@ -762,12 +939,13 @@
   const stockPill = (p) => (p.stock <= 0
     ? html`<span class="pill bad">нет в наличии</span>`
     : isLow(p) ? html`<span class="pill warn">${ic('alert')}${pcs(p.stock)}</span>` : html`<span class="pill">${pcs(p.stock)}</span>`);
-  const sumVal = (v) => html`${num(v)}<em>сум</em>`;
+  const cnt = (v, key, fmt) => html`<span data-count="${Math.round(v)}" data-key="${key}"${raw(fmt ? ` data-fmt="${fmt}"` : '')}>${fmt === 'compact' ? compact(v) : num(v)}</span>`;
+  const sumVal = (v, key) => html`${key ? cnt(v, key) : num(v)}<em>сум</em>`;
   const empty = (icon, text) => html`<div class="empty">${ic(icon)}<span>${text}</span></div>`;
 
-  function saleRow(s, act) {
+  function saleRow(s, act, isNew) {
     const hasRet = S.returns.some((r) => r.saleId === s.id);
-    return html`<button class="row" data-act="${act || 'openSale'}" data-id="${s.id}">
+    return html`<button class="row${isNew ? ' is-new' : ''}" data-act="${act || 'openSale'}" data-id="${s.id}">
       <span class="row-ico sale">${ic(PAY[s.payment].icon)}</span>
       <span class="row-main">
         <span class="row-title">Чек №${s.no}${s.customer ? html` <span class="faint">· ${s.customer}</span>` : ''}</span>
@@ -820,17 +998,19 @@
       const t = calc(daysAgo(0));
       const low = lowStock();
       const recent = S.sales.slice(-8).reverse();
+      const seen = U.seenSale;
+      U.seenSale = S.sales.length ? S.sales[S.sales.length - 1].no : 0;
       const todayRaw = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
       const today = todayRaw.charAt(0).toUpperCase() + todayRaw.slice(1);
       return html`
       <section class="hero" aria-label="Итоги дня">
         <div class="hero-top"><span class="hero-label">Выручка за сегодня</span><span class="hero-date">${today}</span></div>
-        <div class="hero-value">${num(t.revenue)}<small>сум</small></div>
+        <div class="hero-value">${cnt(t.revenue, 'hero-rev')}<small>сум</small></div>
         ${t.refunds ? html`<div class="hero-label">продажи ${money(t.gross)} · возвраты −${money(t.refunds)}</div>` : ''}
         <div class="hero-stats">
-          <div><b>${num(t.checks)}</b><span>${plural(t.checks, ['чек', 'чека', 'чеков'])}</span></div>
-          <div><b>${num(t.units)}</b><span>продано, шт</span></div>
-          <div><b>${t.checks ? compact(t.avg) : '—'}</b><span>средний чек</span></div>
+          <div><b>${cnt(t.checks, 'hero-checks')}</b><span>${plural(t.checks, ['чек', 'чека', 'чеков'])}</span></div>
+          <div><b>${cnt(t.units, 'hero-units')}</b><span>продано, шт</span></div>
+          <div><b>${t.checks ? cnt(t.avg, 'hero-avg', 'compact') : '—'}</b><span>средний чек</span></div>
         </div>
       </section>
       ${low.length ? html`<button class="alert" data-act="lowStock">${ic('alert')}
@@ -839,7 +1019,7 @@
       <nav class="qa" aria-label="Быстрые действия">${QUICK.map(([to, label, icon], i) => html`<button class="qa-btn${i === 0 ? ' primary' : ''}" data-act="nav" data-to="${to}"><span class="qa-ico">${ic(icon)}</span><span>${label}</span></button>`)}</nav>
       <section class="card flush">
         <div class="card-h"><h2 class="sec-title">Последние продажи</h2><button class="link" data-act="nav" data-to="journal">Журнал ${ic('right', 'i-sm')}</button></div>
-        <div class="rows">${recent.length ? recent.map((s) => saleRow(s)) : empty('receipt', 'Продаж пока нет')}</div>
+        <div class="rows">${recent.length ? recent.map((s) => saleRow(s, null, seen != null && s.no > seen)) : empty('receipt', 'Продаж пока нет')}</div>
       </section>`;
     },
   };
@@ -847,7 +1027,7 @@
   // Продажа (касса)
   function cartLine(l) {
     const p = P(l.pid);
-    return html`<div class="cart-line${U.flash === p.id ? ' flash' : ''}">
+    return html`<div class="cart-line${U.flash === p.id ? (U.flashNew ? ' flash new' : ' flash') : ''}">
       <div class="cart-name">${p.name}<div class="cart-price">${num(p.sellPrice)} × ${l.qty} · на складе ${p.stock}</div></div>
       <button class="rm" data-act="rmCart" data-id="${p.id}" aria-label="Убрать из корзины">${ic('trash', 'i-sm')}</button>
       <div class="cart-ctrl">
@@ -887,7 +1067,7 @@
       <section class="card">
         <div class="field"><label for="cust">Имя покупателя</label><input class="input" id="cust" autocomplete="off" maxlength="60" placeholder="Необязательно" value="${c.customer}" data-in="customer"></div>
         <div class="field"><span class="label" id="pay-label">Способ оплаты</span>
-          <div class="seg pay" role="radiogroup" aria-labelledby="pay-label">${Object.entries(PAY).map(([k, v]) => html`<button role="radio" aria-checked="${String(c.payment === k)}" class="${c.payment === k ? 'on' : ''}" data-act="pay" data-v="${k}">${ic(v.icon)}<span>${v.name}</span></button>`)}</div>
+          <div class="seg pay" role="radiogroup" aria-labelledby="pay-label" data-seg="pay" data-i="${Object.keys(PAY).indexOf(c.payment)}" style="--n:3;--i:${Object.keys(PAY).indexOf(c.payment)}"><span class="seg-pill" aria-hidden="true"></span>${Object.entries(PAY).map(([k, v]) => html`<button role="radio" aria-checked="${String(c.payment === k)}" class="${c.payment === k ? 'on' : ''}" data-act="pay" data-v="${k}">${ic(v.icon)}<span>${v.name}</span></button>`)}</div>
         </div>
         ${c.payment === 'cash' ? html`<div class="field-grid">
           <div class="field"><label for="recv">Получено, сум</label><input class="input money" id="recv" inputmode="numeric" autocomplete="off" placeholder="${num(total)}" value="${c.received}" data-in="received"></div>
@@ -904,7 +1084,7 @@
     },
     bar() {
       if (!cartLines().length) return '';
-      return html`<div class="checkout-inner"><div class="checkout-sum"><span>Итого</span><b>${money(cartTotal())}</b></div><button class="btn btn-primary btn-lg" data-act="checkout">${ic('receipt')}Пробить чек</button></div>`;
+      return html`<div class="checkout-inner"><div class="checkout-sum"><span>Итого</span><b>${cnt(cartTotal(), 'cart-total')}&nbsp;сум</b></div><button class="btn btn-primary btn-lg" data-act="checkout">${ic('receipt')}Пробить чек</button></div>`;
     },
   };
 
@@ -921,7 +1101,7 @@
       return (typeof x === 'string' ? x.localeCompare(y, 'ru') : x - y) * dir || a.name.localeCompare(b.name, 'ru');
     });
   }
-  const pcard = (p) => html`<button class="pcard" data-act="openProduct" data-id="${p.id}">
+  const pcard = (p) => html`<button class="pcard" data-act="openProduct" data-id="${p.id}" style="view-transition-name:pc-${p.id}">
       <span class="cat-ico">${ic(catOf(p).icon)}</span>
       <span class="pcard-name">${p.name}</span>
       <span class="pcard-code">${p.barcode} · ${catOf(p).name}</span>
@@ -1210,7 +1390,7 @@
     const s = auditStats();
     return html`
       <div class="card-h"><h2 class="sec-title">Сверка остатков</h2><span class="sec-sub">проверено ${s.checked} из ${s.total}</span></div>
-      <div class="progress" aria-hidden="true"><i style="width:${pct(s.checked, s.total)}%"></i></div>
+      <div class="progress" aria-hidden="true"><i data-grow="aud-progress" data-to="${pct(s.checked, s.total)}" style="width:${pct(s.checked, s.total)}%"></i></div>
       <div class="stat-table">
         <span>Недостача</span><b class="${s.short ? 'bad' : ''}">${s.short ? `−${pcs(s.short)} · −${money(s.shortSum)}` : '—'}</b>
         <span>Излишек</span><b class="${s.extra ? 'good' : ''}">${s.extra ? `+${pcs(s.extra)} · +${money(s.extraSum)}` : '—'}</b>
@@ -1224,6 +1404,7 @@
   }
   function refreshAudit() {
     setHTML($('#aud-sum'), auditSummary());
+    fx($('#aud-sum'));
     refreshBar();
   }
   SCREENS.audit = {
@@ -1310,18 +1491,18 @@
         <div class="chart-cols" role="list">${data.map((d, i) => {
           const h = (Math.max(0, d.v) / top) * 100;
           const pos = i < n * 0.2 ? ' l' : i > n * 0.8 ? ' r' : '';
-          return html`<div class="col${d.v <= 0 ? ' zero' : ''}" role="listitem" tabindex="0" style="--h:${h}%" data-tip="${d.tip}: ${money(d.v)}" aria-label="${d.tip}: ${money(d.v)}"><i style="height:${h}%"></i>${i === maxI ? html`<span class="col-label${pos}">${compact(d.v)}</span>` : ''}</div>`;
+          return html`<div class="col${d.v <= 0 ? ' zero' : ''}" role="listitem" tabindex="0" style="--h:${h}%" data-tip="${d.tip}: ${money(d.v)}" aria-label="${d.tip}: ${money(d.v)}"><i data-grow="col-${i}" data-prop="height" data-to="${h}" style="height:${h}%;--n:${i}"></i>${i === maxI ? html`<span class="col-label${pos}">${compact(d.v)}</span>` : ''}</div>`;
         })}</div>
         <div class="chart-tip" hidden></div>
       </div>
       <div class="chart-x" aria-hidden="true">${data.map((d, i) => html`<span>${(n - 1 - i) % every === 0 ? d.x : ''}</span>`)}</div>
     </div>`;
   }
-  function hbars(rows, total) {
+  function hbars(rows, total, group) {
     const max = Math.max(1, ...rows.map((r) => r.v));
-    return html`<div class="hbars">${rows.map((r) => html`<div class="hbar">
+    return html`<div class="hbars">${rows.map((r, i) => html`<div class="hbar">
       <div class="hbar-top"><span class="hbar-name">${r.lead || ''}<span class="txt">${r.name}</span></span><b>${money(r.v)}${total ? html` <span class="faint">· ${pct(r.v, total)}%</span>` : ''}${r.sub ? html` <span class="faint">· ${r.sub}</span>` : ''}</b></div>
-      <div class="hbar-track"><i style="width:${(Math.max(0, r.v) / max) * 100}%"></i></div>
+      <div class="hbar-track"><i data-grow="${group}-${r.key}" data-to="${(Math.max(0, r.v) / max) * 100}" style="width:${(Math.max(0, r.v) / max) * 100}%;--n:${i}"></i></div>
     </div>`)}</div>`;
   }
   SCREENS.reports = {
@@ -1330,30 +1511,30 @@
       const from = periodStart(U.period);
       const st = calc(from);
       const range = U.period === 'today' ? fmtDate(Date.now(), true) : `${fmtDate(from, new Date(from).getFullYear() !== new Date().getFullYear())} — ${fmtDate(Date.now(), true)}`;
-      const pays = Object.entries(PAY).map(([k, v]) => ({ name: v.name, lead: ic(v.icon, 'i-sm'), v: st.byPay[k] || 0 }));
+      const pays = Object.entries(PAY).map(([k, v]) => ({ key: k, name: v.name, lead: ic(v.icon, 'i-sm'), v: st.byPay[k] || 0 }));
       const sellers = Object.entries(st.bySeller)
-        .map(([id, b]) => ({ name: empName(id), v: b.sum, sub: `${b.checks} ${plural(b.checks, ['чек', 'чека', 'чеков'])}` }))
+        .map(([id, b]) => ({ key: id, name: empName(id), v: b.sum, sub: `${b.checks} ${plural(b.checks, ['чек', 'чека', 'чеков'])}` }))
         .sort((a, b) => b.v - a.v);
       const top = Object.values(st.byProd).filter((p) => p.qty > 0).sort((a, b) => b.sum - a.sum).slice(0, 10)
-        .map((p, i) => ({ name: p.name, lead: html`<span class="rank">${i + 1}</span>`, v: p.sum, sub: pcs(p.qty) }));
+        .map((p, i) => ({ key: p.pid, name: p.name, lead: html`<span class="rank">${i + 1}</span>`, v: p.sum, sub: pcs(p.qty) }));
       const low = lowStock();
       const units = sum(S.products, (p) => p.stock);
       const costVal = sum(S.products, (p) => p.stock * p.buyPrice);
       const retailVal = sum(S.products, (p) => p.stock * p.sellPrice);
       return html`
-      <div class="seg" role="tablist" aria-label="Период">${Object.entries(PERIODS).map(([k, v]) => html`<button role="tab" aria-selected="${String(U.period === k)}" class="${U.period === k ? 'on' : ''}" data-act="period" data-v="${k}">${v}</button>`)}</div>
+      <div class="seg" role="tablist" aria-label="Период" data-seg="period" data-i="${Object.keys(PERIODS).indexOf(U.period)}" style="--n:4;--i:${Object.keys(PERIODS).indexOf(U.period)}"><span class="seg-pill" aria-hidden="true"></span>${Object.entries(PERIODS).map(([k, v]) => html`<button role="tab" aria-selected="${String(U.period === k)}" class="${U.period === k ? 'on' : ''}" data-act="period" data-v="${k}">${v}</button>`)}</div>
       <p class="summary-line">${range}</p>
       <div class="kpis">
-        <div class="kpi main"><span>Выручка</span><b>${sumVal(st.revenue)}</b><small>продажи ${money(st.gross)}${st.refunds ? ` · возвраты −${money(st.refunds)} (${st.rets.length})` : ' · возвратов нет'}</small></div>
-        <div class="kpi"><span>Чеков</span><b>${num(st.checks)}</b></div>
-        <div class="kpi"><span>Продано единиц</span><b>${num(st.units)}</b></div>
-        <div class="kpi"><span>Средний чек</span><b>${sumVal(st.avg)}</b></div>
-        <div class="kpi"><span>Валовая прибыль</span><b>${sumVal(st.profit)}</b><small>${st.revenue > 0 ? 'маржа ' + pct(st.profit, st.revenue) + '%' : ''}</small></div>
+        <div class="kpi main"><span>Выручка</span><b>${sumVal(st.revenue, 'k-rev')}</b><small>продажи ${money(st.gross)}${st.refunds ? ` · возвраты −${money(st.refunds)} (${st.rets.length})` : ' · возвратов нет'}</small></div>
+        <div class="kpi"><span>Чеков</span><b>${cnt(st.checks, 'k-checks')}</b></div>
+        <div class="kpi"><span>Продано единиц</span><b>${cnt(st.units, 'k-units')}</b></div>
+        <div class="kpi"><span>Средний чек</span><b>${sumVal(st.avg, 'k-avg')}</b></div>
+        <div class="kpi"><span>Валовая прибыль</span><b>${sumVal(st.profit, 'k-profit')}</b><small>${st.revenue > 0 ? 'маржа ' + pct(st.profit, st.revenue) + '%' : ''}</small></div>
       </div>
       <section class="card"><div class="card-h"><h2 class="sec-title">${U.period === 'today' ? 'Выручка по часам' : 'Выручка по дням'}</h2><span class="sec-sub">с учётом возвратов</span></div>${chart(series(from))}</section>
-      <section class="card"><h2 class="sec-title">Способы оплаты</h2>${st.checks || st.refunds ? hbars(pays, st.revenue) : empty('cash', 'Нет оплат за период')}</section>
-      <section class="card"><h2 class="sec-title">Продавцы</h2>${sellers.length ? hbars(sellers) : empty('users', 'Нет продаж за период')}</section>
-      <section class="card"><div class="card-h"><h2 class="sec-title">Топ товаров</h2><span class="sec-sub">по выручке</span></div>${top.length ? hbars(top) : empty('box', 'Нет продаж за период')}</section>
+      <section class="card"><h2 class="sec-title">Способы оплаты</h2>${st.checks || st.refunds ? hbars(pays, st.revenue, 'pay') : empty('cash', 'Нет оплат за период')}</section>
+      <section class="card"><h2 class="sec-title">Продавцы</h2>${sellers.length ? hbars(sellers, 0, 'sel') : empty('users', 'Нет продаж за период')}</section>
+      <section class="card"><div class="card-h"><h2 class="sec-title">Топ товаров</h2><span class="sec-sub">по выручке</span></div>${top.length ? hbars(top, 0, 'top') : empty('box', 'Нет продаж за период')}</section>
       <section class="card flush"><div class="card-h"><h2 class="sec-title">Мало на складе</h2><span class="pill ${low.length ? 'warn' : 'good'}">${low.length}</span></div>
         <div class="rows">${low.length ? low.map((p) => html`<div class="row"><span class="row-main"><span class="row-title">${p.name}</span><span class="row-sub"><span>остаток ${p.stock} · минимум ${p.min}</span></span></span><button class="btn btn-sm" data-act="incomeFor" data-id="${p.id}">${ic('income', 'i-sm')}Приход</button></div>`) : empty('check', 'Всех товаров достаточно')}</div>
       </section>
@@ -1562,9 +1743,10 @@
     if (!s) return;
     const rets = saleReturns(id);
     const canReturn = s.items.some((i) => i.qty > returnedQty(s.id, i.pid));
-    openSheet(html`${sheetHead(fresh ? 'Чек пробит' : 'Чек №' + s.no, fresh ? `№${s.no} · ${money(s.total)} · ${PAY[s.payment].name}` : fmtDT(s.ts))}
-      <div class="sheet-body">
-        <div class="receipt">
+    const head = fresh
+      ? html`<div class="sheet-h"><div class="done"><svg class="ok-check" viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="23"/><path d="m15 27 7 7 15-15"/></svg><div><h2>Чек пробит</h2><div class="sec-sub">№${s.no} · ${money(s.total)} · ${PAY[s.payment].name}</div></div></div><button class="icon-btn" data-act="closeSheet" aria-label="Закрыть">${ic('x')}</button></div>`
+      : sheetHead('Чек №' + s.no, fmtDT(s.ts));
+    const paper = html`
           <div class="rc-center"><div class="rc-store">${S.store.name}</div>${S.store.address ? html`<div class="rc-muted">${S.store.address}</div>` : ''}</div>
           <hr class="rc-hr">
           <div class="rc-row"><span>ЧЕК №${s.no}</span><span>${fmtDT(s.ts)}</span></div>
@@ -1578,8 +1760,12 @@
           ${s.payment === 'cash' && s.received > s.total ? html`<div class="rc-row"><span>Получено</span><span>${num(s.received)}</span></div><div class="rc-row"><span>Сдача</span><span>${num(s.received - s.total)}</span></div>` : ''}
           ${rets.length ? html`<hr class="rc-hr">${rets.map((r) => html`<div class="rc-row rc-ret"><span>Возврат ${retNo(r)}, ${fmtDate(r.ts)}</span><span>−${num(r.total)}</span></div>`)}` : ''}
           <hr class="rc-hr">
-          <div class="rc-center rc-muted">Суммы в узбекских сумах (UZS)<br>Спасибо за покупку!</div>
-        </div>
+          <div class="rc-center rc-muted">Суммы в узбекских сумах (UZS)<br>Спасибо за покупку!</div>`;
+    openSheet(html`${head}
+      <div class="sheet-body">
+        ${fresh
+          ? html`<div class="printer"><div class="printer-slot" aria-hidden="true"></div><div class="paper-feed"><div class="receipt printing">${paper}</div></div></div>`
+          : html`<div class="receipt">${paper}</div>`}
         <div class="btn-row">${fresh
           ? html`<button class="btn btn-primary btn-lg" data-act="closeSheet">${ic('plus')}Новая продажа</button>`
           : html`${canReturn ? html`<button class="btn" data-act="refundFor" data-id="${s.id}">${ic('refund')}Оформить возврат</button>` : ''}<button class="btn btn-primary" data-act="closeSheet">Закрыть</button>`}</div>
@@ -1647,31 +1833,54 @@
     const scr = SCREENS[route()];
     const bar = scr.bar ? scr.bar() : '';
     const el = $('#bar');
+    const wasHidden = el.hidden;
     setHTML(el, bar);
     el.hidden = !bar;
     document.body.classList.toggle('with-bar', !!bar);
     $('.app').classList.toggle('has-bar', !!bar);
+    if (!bar) memo.delete('cart-total');
+    else if (wasHidden && !reduceMotion()) restartAnim(el, 'bar-in');
+    fx(el);
   }
   let lastRoute = null;
+  let lastTab = null;
+  let lastBadge = 0;
   function render() {
     const r = route();
     const scr = SCREENS[r];
-    if (r !== lastRoute) {
+    const entering = r !== lastRoute;
+    const first = lastRoute === null;
+    if (entering) {
       if (lastRoute === 'scanner') U.scanCode = '';
       lastRoute = r;
       window.scrollTo(0, 0);
     }
     $('#title').textContent = scr.title;
+    if (entering && !first && !reduceMotion()) restartAnim($('#title'), 'title-in');
     $('#eyebrow').textContent = S.store.name + (S.meta.demo ? ' · демо' : '');
     $('#back').hidden = !!scr.tab;
     const e = me();
     setHTML($('#who'), html`<span class="avatar ${e.role}">${initials(e.name)}</span><span class="who-text"><span class="who-name">${e.name.split(/\s+/)[0]}</span><span class="who-role">${ROLES[e.role]}</span></span>`);
     const curTab = scr.tab ? r : 'more';
     const n = cartUnits();
-    setHTML($('#tabs'), TABS.map(([id, label, icon]) => html`<button class="tab${curTab === id ? ' on' : ''}" data-act="nav" data-to="${id}" aria-current="${curTab === id ? 'page' : 'false'}">${ic(icon)}<span>${label}</span>${id === 'sale' && n ? html`<span class="tab-badge">${n}</span>` : ''}</button>`));
+    const badgePop = !first && n > 0 && n !== lastBadge;
+    const bounce = !first && curTab !== lastTab;
+    setHTML($('#tabs'), TABS.map(([id, label, icon]) => html`<button class="tab${curTab === id ? ' on' : ''}${curTab === id && bounce ? ' bounce' : ''}" data-act="nav" data-to="${id}" aria-current="${curTab === id ? 'page' : 'false'}">${ic(icon)}<span>${label}</span>${id === 'sale' && n ? html`<span class="tab-badge${badgePop ? ' pop' : ''}">${n}</span>` : ''}</button>`));
+    $('#tab-ind').style.setProperty('--i', TABS.findIndex(([id]) => id === curTab));
+    lastBadge = n;
+    lastTab = curTab;
     setHTML($('#view'), scr.view());
     U.flash = null;
+    U.flashNew = false;
+    if (entering || U.enter) enterAnim($('#view'));
+    U.enter = false;
+    fx($('#view'));
     refreshBar();
+    if (U.pop) {
+      const c = $(U.pop);
+      U.pop = null;
+      if (c && !reduceMotion()) restartAnim(c, 'pop');
+    }
     if (U.focus) {
       const f = $('#' + U.focus);
       U.focus = null;
@@ -1751,10 +1960,12 @@
 
     // касса
     addCart(el) {
+      const from = el.getBoundingClientRect();
       const r = addToCart(el.dataset.id);
-      if (!r.ok) { toast(r.msg, 'bad'); return; }
+      if (!r.ok) { toast(r.msg, 'bad'); shake(el); return; }
       if (el.classList.contains('sug')) U.saleQ = '';
       render();
+      flyTo(from, $('#bar .checkout-sum') || $('.tab[data-to="sale"] .i'));
     },
     cartQty(el) {
       const line = S.cart.items.find((l) => l.pid === el.dataset.id);
@@ -1780,8 +1991,8 @@
     },
 
     // товары
-    prodCat(el) { U.prodCat = el.dataset.v; render(); },
-    prodLow() { U.prodLow = !U.prodLow; render(); },
+    prodCat(el) { U.prodCat = el.dataset.v; withVT(render); },
+    prodLow() { U.prodLow = !U.prodLow; withVT(render); },
     newProduct() { productForm(null); },
     editProduct(el) { productForm(P(el.dataset.id)); },
     deleteProduct(el) {
@@ -1867,15 +2078,17 @@
       if (!s) { toast(n != null ? `Чек №${n} не найден` : 'Введите номер чека', 'bad'); return; }
       U.refSale = s.id;
       U.refQty = {};
+      U.enter = true;
       render();
     },
     refPick(el) {
       U.refSale = el.dataset.id;
       U.refQty = {};
+      U.enter = true;
       render();
       window.scrollTo(0, 0);
     },
-    refClear() { U.refSale = null; U.refQty = {}; render(); },
+    refClear() { U.refSale = null; U.refQty = {}; U.enter = true; render(); },
     refQty(el) {
       const sale = saleById(U.refSale);
       const it = sale && sale.items.find((i) => i.pid === el.dataset.id);
@@ -1900,7 +2113,7 @@
     },
 
     // инвентаризация
-    audCat(el) { U.audCat = el.dataset.v; render(); },
+    audCat(el) { U.audCat = el.dataset.v; U.enter = true; render(); },
     audDiff() { U.audDiff = !U.audDiff; render(); },
     audFill(el) {
       const p = P(el.dataset.id);
@@ -1946,7 +2159,7 @@
 
     // отчёты и журнал
     period(el) { U.period = el.dataset.v; render(); },
-    jType(el) { U.jType = el.dataset.v; U.jLimit = 80; render(); },
+    jType(el) { U.jType = el.dataset.v; U.jLimit = 80; U.enter = true; render(); },
     jMore() { U.jLimit += 80; setHTML($('#jlist'), journalList()); },
 
     // сотрудники
@@ -2044,7 +2257,11 @@
       if (row) row.classList.toggle('counted', n != null);
       const dc = audDiffCell(p);
       const cell = $(`[data-diff="${p.id}"]`);
-      if (cell) { cell.className = 'aud-diff ' + dc.cls; cell.textContent = dc.text; }
+      if (cell) {
+        cell.className = 'aud-diff ' + dc.cls;
+        cell.textContent = dc.text;
+        if (dc.text && !reduceMotion()) restartAnim(cell, 'pop');
+      }
       refreshAudit();
     },
     jQ(el) { U.jQ = el.value; U.jLimit = 80; setHTML($('#jlist'), journalList()); },
@@ -2052,7 +2269,7 @@
 
   const CH = {
     cartQtySet(el) { setCartQty(el.dataset.id, parseQty(el.value) || 0); },
-    prodSort(el) { U.prodSort = el.value; setHTML($('#plist'), productList()); },
+    prodSort(el) { U.prodSort = el.value; withVT(() => setHTML($('#plist'), productList())); },
     async scanPhoto(el) {
       const file = el.files && el.files[0];
       el.value = '';
@@ -2154,7 +2371,14 @@
       const fn = ACT[el.dataset.act];
       if (!fn) return;
       e.preventDefault();
+      if (el.classList.contains('chip')) U.pop = `.chip[data-act="${el.dataset.act}"]` + (el.dataset.v ? `[data-v="${el.dataset.v}"]` : '');
       fn(el, e);
+    });
+    document.addEventListener('animationend', (e) => {
+      if (e.animationName === 'rise') {
+        e.target.classList.remove('rise');
+        e.target.style.removeProperty('--d');
+      }
     });
     document.addEventListener('input', (e) => {
       const el = e.target.closest('[data-in]');

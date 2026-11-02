@@ -1,5 +1,5 @@
 /* Офлайн-режим «Касса и склад»: сначала сеть, при её отсутствии — сохранённая копия. */
-const CACHE = 'kassa-v1';
+const CACHE = 'kassa-v2';
 const SHELL = ['./index.html', './styles.css', './app.js', './demo.js', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png'];
 const CDN = /^(fonts\.googleapis\.com|fonts\.gstatic\.com|cdn\.jsdelivr\.net)$/;
 
