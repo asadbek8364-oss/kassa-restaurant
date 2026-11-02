@@ -74,6 +74,7 @@ php artisan crm:generate-reminders       # queue campaign reminder messages (dai
 php artisan scramble:cache               # warm Scramble OpenAPI cache
 php artisan scramble:clear               # invalidate Scramble OpenAPI cache
 php artisan seed:demo                    # regenerate full demo dataset (truncates demo tables; --force skips confirm)
+php artisan kassa:demo --force           # «Касса и склад»: replace kassa_* data with the demo shop (PIN owner 1111, sellers 2222–4444)
 php artisan db:seed --class=DemoSeeder --force # explicit full demo dataset (never use on production)
 
 # Formatting
@@ -92,6 +93,7 @@ Production must trigger `php artisan schedule:run` every minute for the schedule
 - **Services**: `app/Services/` — ~22 services: AuditLog, BatchService, CashierShiftService, DineOrderService, GoodsReceivingService, LoyaltyService, PaymentGatewayManager, PricingService, PriceListService, PurchaseOrderService, ReorderService, StockMutationService, StockTransferService, UnitConversionService, WhatsAppService, etc.
 - **Layouts**: `POSLayout.jsx` (POS), `DashboardLayout.jsx` (admin), `AuthenticatedLayout.jsx` (profile), `GuestLayout.jsx` (auth), `PublicLayout.jsx` (public dine-in)
 - **Routes**: `routes/web.php` (~50+ dashboard routes), `routes/api.php` (webhooks + REST API), `routes/auth.php` (Breeze)
+- **«Касса и склад»** (separate mobile shop app): static client in `public/kassa/`, API `/api/kassa` (PIN login → bearer token via `kassa.auth`, owner-only via `kassa.owner`), models `app/Models/Kassa`, logic `app/Services/Kassa` (all stock/money/report math server-side), tables `kassa_*`, tests `tests/Feature/Kassa`. Docs: `docs/kassa-sklad.md`.
 - **Inertia shared props**: `HandleInertiaRequests.php` — auth, permissions, notifications (low stock, receivables, payables aging), active shift, store profile, appVersion
 
 ## Middleware

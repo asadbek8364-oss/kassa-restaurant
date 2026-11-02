@@ -30,6 +30,13 @@ class AppServiceProvider extends ServiceProvider
                 ->by($request->user()?->id ?: $request->ip());
         });
 
+        // «Касса и склад»: у каждого маршрута свой счётчик. Числовой throttle:N,1 делит один счётчик
+        // на IP между всеми маршрутами, а телефоны магазина обычно выходят в сеть с одного IP.
+        RateLimiter::for('kassa-public', fn (Request $request) => Limit::perMinute(60)->by('kassa-public|'.$request->ip()));
+        RateLimiter::for('kassa-setup', fn (Request $request) => Limit::perMinute(5)->by('kassa-setup|'.$request->ip()));
+        RateLimiter::for('kassa-login', fn (Request $request) => Limit::perMinute(30)->by('kassa-login|'.$request->ip()));
+        RateLimiter::for('kassa-api', fn (Request $request) => Limit::perMinute(300)->by('kassa-api|'.sha1((string) ($request->bearerToken() ?: $request->ip()))));
+
         // API documentation (Scramble) is public — open source project, docs should be viewable
         // by anyone. Protect via SCRAMBLE_DOCS_TOKEN env if desired (RestrictedDocsAccess).
         Gate::define('viewApiDocs', fn () => true);
