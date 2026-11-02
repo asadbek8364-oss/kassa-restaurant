@@ -2,13 +2,16 @@
 
 namespace Tests\Feature\Kassa;
 
+use App\Console\Commands\KassaDemoCommand;
 use App\Models\Kassa\Employee;
 use App\Models\Kassa\Product;
 use App\Models\Kassa\Sale;
 use App\Models\Kassa\Store;
+use App\Rules\KassaPin;
 use App\Services\Kassa\KassaDemoService;
 use App\Support\Kassa\Clock;
 use Carbon\CarbonImmutable;
+use Illuminate\Contracts\Console\Kernel as ConsoleKernel;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\TestCase;
@@ -252,12 +255,14 @@ class KassaApiTest extends TestCase
         $this->loginAs($this->seller, '2222');
 
         $this->deleteJson("/api/kassa/products/{$p->id}")->assertForbidden();
-        $this->postJson('/api/kassa/employees', ['name' => 'Новый', 'role' => 'seller', 'pin' => '5555'])->assertForbidden();
+        $this->postJson('/api/kassa/employees', ['name' => 'Новый', 'role' => 'seller', 'pin' => '7391'])->assertForbidden();
         $this->putJson('/api/kassa/store', ['name' => 'Чужой'])->assertForbidden();
         $this->postJson('/api/kassa/data/wipe')->assertForbidden();
 
         $this->loginAs($this->owner, '1111');
-        $this->postJson('/api/kassa/employees', ['name' => 'Мадина Алиева', 'role' => 'seller', 'pin' => '5555'])->assertCreated();
+        $this->postJson('/api/kassa/employees', ['name' => 'Мадина Алиева', 'role' => 'seller', 'pin' => '5555'])
+            ->assertUnprocessable()->assertJsonValidationErrors('pin');
+        $this->postJson('/api/kassa/employees', ['name' => 'Мадина Алиева', 'role' => 'seller', 'pin' => '7391'])->assertCreated();
         $this->deleteJson("/api/kassa/products/{$p->id}")->assertOk();
     }
 
@@ -295,15 +300,89 @@ class KassaApiTest extends TestCase
         Employee::query()->delete();
 
         $this->getJson('/api/kassa/options')->assertOk()->assertJsonPath('needs_setup', true);
-        $token = $this->postJson('/api/kassa/setup', ['store_name' => 'Smart Case', 'owner_name' => 'Ойбек', 'pin' => '4321'])
+        $token = $this->postJson('/api/kassa/setup', ['store_name' => 'Smart Case', 'owner_name' => 'Ойбек', 'pin' => '5728'])
             ->assertCreated()->assertJsonPath('employee.role', 'owner')->json('token');
 
         $this->withToken($token)->getJson('/api/kassa/bootstrap')->assertOk()->assertJsonPath('store.name', 'Smart Case');
-        $this->postJson('/api/kassa/setup', ['store_name' => 'X', 'owner_name' => 'Y', 'pin' => '0000'])->assertStatus(409);
+        $this->postJson('/api/kassa/setup', ['store_name' => 'X', 'owner_name' => 'Y', 'pin' => '9184'])->assertStatus(409);
+    }
+
+    public function test_setup_rejects_simple_pins(): void
+    {
+        Employee::query()->delete();
+
+        foreach (['1111', '1234', '987654', '2580', '12'] as $pin) {
+            $this->postJson('/api/kassa/setup', ['store_name' => 'Smart Case', 'owner_name' => 'Ойбек', 'pin' => $pin])
+                ->assertUnprocessable()->assertJsonValidationErrors('pin');
+        }
+        $this->assertSame(0, Employee::count());
+
+        foreach (['0000', '4321', '0123', '1212', '777777'] as $weak) {
+            $this->assertTrue(KassaPin::isWeak($weak), $weak);
+        }
+        foreach (['5728', '1357', '904162', '2468'] as $ok) {
+            $this->assertFalse(KassaPin::isWeak($ok), $ok);
+        }
+    }
+
+    public function test_production_setup_is_closed_without_setup_code(): void
+    {
+        Employee::query()->delete();
+        $this->app['env'] = 'production';
+
+        $this->getJson('/api/kassa/options')->assertOk()
+            ->assertJsonPath('setup_code_required', true)
+            ->assertJsonPath('setup_ready', false)
+            ->assertJsonPath('demo_available', false);
+        $this->postJson('/api/kassa/setup', ['store_name' => 'Smart Case', 'owner_name' => 'Ойбек', 'pin' => '5728'])->assertForbidden();
+        $this->assertSame(0, Employee::count());
+    }
+
+    public function test_production_setup_needs_the_right_setup_code(): void
+    {
+        Employee::query()->delete();
+        $this->app['env'] = 'production';
+        config(['kassa.setup_code' => 'k7Q2-9xPa']);
+        $data = ['store_name' => 'Smart Case', 'owner_name' => 'Ойбек', 'pin' => '5728'];
+
+        $this->getJson('/api/kassa/options')->assertOk()->assertJsonPath('setup_ready', true);
+        $this->postJson('/api/kassa/setup', $data + ['setup_code' => 'guess'])
+            ->assertUnprocessable()->assertJsonValidationErrors('setup_code');
+        $this->postJson('/api/kassa/setup', $data + ['setup_code' => 'k7Q2-9xPa'])
+            ->assertCreated()->assertJsonPath('employee.name', 'Ойбек');
+    }
+
+    public function test_demo_is_off_by_default_and_never_available_in_production(): void
+    {
+        $this->assertFalse(KassaDemoService::allowed());
+        $this->assertFalse((new KassaDemoCommand)->isEnabled());
+        $this->loginAs($this->owner, '1111');
+        $this->postJson('/api/kassa/data/demo')->assertNotFound();
+        $this->postJson('/api/kassa/data/wipe')->assertNotFound();
+        $this->getJson('/api/kassa/bootstrap')->assertOk()->assertJsonPath('features.demo', false);
+
+        Employee::query()->delete();
+        $this->postJson('/api/kassa/setup', ['demo' => true])->assertNotFound();
+        $this->assertSame(0, Product::count());
+
+        config(['kassa.demo_enabled' => true]);
+        $this->app['env'] = 'production';
+        $this->assertFalse(KassaDemoService::allowed());
+        $this->assertFalse((new KassaDemoCommand)->isEnabled());
+        $this->expectException(\RuntimeException::class);
+        app(KassaDemoService::class)->load();
+    }
+
+    /** Демо включается только явно и вне production; artisan пересобирается, чтобы увидеть команду. */
+    private function enableDemo(): void
+    {
+        config(['kassa.demo_enabled' => true]);
+        $this->app->make(ConsoleKernel::class)->setArtisan(null);
     }
 
     public function test_demo_sales_are_never_in_the_future_even_right_after_midnight(): void
     {
+        $this->enableDemo();
         $this->travelTo(CarbonImmutable::parse('2026-11-03 00:00:20', 'Asia/Tashkent'));
         app(KassaDemoService::class)->load();
 
@@ -313,6 +392,7 @@ class KassaApiTest extends TestCase
 
     public function test_demo_dataset_loads_with_todays_sales(): void
     {
+        $this->enableDemo();
         $this->artisan('kassa:demo', ['--force' => true])->assertSuccessful();
 
         $this->assertSame(48, Product::count());

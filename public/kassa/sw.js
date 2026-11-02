@@ -1,6 +1,6 @@
 /* Оболочка «Кассы и склада» без сети: сначала сеть, при её отсутствии — сохранённая копия.
    Запросы к /api/kassa сюда не попадают — данные всегда берутся с сервера. */
-const CACHE = 'kassa-v3';
+const CACHE = 'kassa-v4';
 const SHELL = ['./index.html', './styles.css', './app.js', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png'];
 const CDN = /^(fonts\.googleapis\.com|fonts\.gstatic\.com|cdn\.jsdelivr\.net)$/;
 

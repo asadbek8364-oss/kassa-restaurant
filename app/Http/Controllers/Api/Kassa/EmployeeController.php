@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Kassa;
 
 use App\Models\Kassa\Employee;
+use App\Rules\KassaPin;
 use App\Services\Kassa\KassaReportService;
 use App\Support\Kassa\Presenter;
 use Illuminate\Http\JsonResponse;
@@ -66,7 +67,7 @@ class EmployeeController extends KassaController
             'name' => 'required|string|max:60',
             'role' => ['required', Rule::in(Employee::ROLES)],
             'phone' => 'nullable|string|max:20',
-            'pin' => [$pinRequired ? 'required' : 'nullable', 'digits_between:4,6'],
+            'pin' => [$pinRequired ? 'required' : 'nullable', new KassaPin],
         ];
     }
 

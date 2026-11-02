@@ -10,6 +10,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Random\Engine\Mt19937;
 use Random\Randomizer;
+use RuntimeException;
 
 /**
  * Демо-магазин аксессуаров: 48 товаров, 4 сотрудника, продажи за 30 дней (8 — сегодня),
@@ -78,9 +79,18 @@ class KassaDemoService
 
     private Randomizer $r;
 
+    /** Демо разрешено только явно (KASSA_DEMO_ENABLED=true) и никогда на рабочем сервере. */
+    public static function allowed(): bool
+    {
+        return (bool) config('kassa.demo_enabled') && ! app()->environment('production');
+    }
+
     /** Полностью заменяет данные кассы демо-набором. */
     public function load(?CarbonImmutable $now = null): void
     {
+        if (! self::allowed()) {
+            throw new RuntimeException('Демо-данные отключены: KASSA_DEMO_ENABLED=false или APP_ENV=production.');
+        }
         $now ??= Clock::now();
         $this->r = new Randomizer(new Mt19937(20261102));
 

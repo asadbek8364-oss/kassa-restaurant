@@ -24,7 +24,7 @@ Open-source POS system (200+ stars). Laravel 13 + Inertia 3.0 + React 19.
 - **Styling**: Tailwind CSS 3 (custom theme in `tailwind.config.js`)
 - **Auth/RBAC**: Spatie Laravel Permission + Laravel Breeze
 - **REST API**: Sanctum token-based at `/api/v1`; Scramble docs at `/docs/api`, spec at `/docs/api.json`; protect with `SCRAMBLE_DOCS_TOKEN`
-- **DB**: MySQL (default); SQLite in-memory for tests
+- **DB**: SQLite file `database/database.sqlite` (default; WAL, busy timeout, IMMEDIATE transactions in `config/database.php`); MySQL optional; SQLite in-memory for tests
 - **i18n**: react-i18next; locales in `resources/js/i18n/locales`; `SetLocale` middleware on web group
 - **Payment gateways**: Midtrans, Xendit (webhooks in `routes/api.php`)
 - **WhatsApp**: whatsapp-web.js via separate Node service (`whatsapp-service/`, port 3001)
@@ -39,8 +39,9 @@ Open-source POS system (200+ stars). Laravel 13 + Inertia 3.0 + React 19.
 ## Developer Commands
 
 ```bash
-# Initial setup
+# Initial setup (.env.example is production-ready: for local dev set APP_ENV=local, APP_DEBUG=true, APP_URL=http://localhost:8000, SESSION_SECURE_COOKIE=false)
 cp .env.example .env
+touch database/database.sqlite
 composer install && PUPPETEER_SKIP_DOWNLOAD=true npm install
 php artisan key:generate
 php artisan migrate --seed
@@ -74,7 +75,7 @@ php artisan crm:generate-reminders       # queue campaign reminder messages (dai
 php artisan scramble:cache               # warm Scramble OpenAPI cache
 php artisan scramble:clear               # invalidate Scramble OpenAPI cache
 php artisan seed:demo                    # regenerate full demo dataset (truncates demo tables; --force skips confirm)
-php artisan kassa:demo --force           # «Касса и склад»: replace kassa_* data with the demo shop (PIN owner 1111, sellers 2222–4444)
+php artisan kassa:demo --force           # «Касса и склад» demo shop (PIN owner 1111, sellers 2222–4444); only with KASSA_DEMO_ENABLED=true and APP_ENV≠production, otherwise the command does not exist
 php artisan db:seed --class=DemoSeeder --force # explicit full demo dataset (never use on production)
 
 # Formatting
@@ -93,7 +94,7 @@ Production must trigger `php artisan schedule:run` every minute for the schedule
 - **Services**: `app/Services/` — ~22 services: AuditLog, BatchService, CashierShiftService, DineOrderService, GoodsReceivingService, LoyaltyService, PaymentGatewayManager, PricingService, PriceListService, PurchaseOrderService, ReorderService, StockMutationService, StockTransferService, UnitConversionService, WhatsAppService, etc.
 - **Layouts**: `POSLayout.jsx` (POS), `DashboardLayout.jsx` (admin), `AuthenticatedLayout.jsx` (profile), `GuestLayout.jsx` (auth), `PublicLayout.jsx` (public dine-in)
 - **Routes**: `routes/web.php` (~50+ dashboard routes), `routes/api.php` (webhooks + REST API), `routes/auth.php` (Breeze)
-- **«Касса и склад»** (separate mobile shop app): static client in `public/kassa/`, API `/api/kassa` (PIN login → bearer token via `kassa.auth`, owner-only via `kassa.owner`), models `app/Models/Kassa`, logic `app/Services/Kassa` (all stock/money/report math server-side), tables `kassa_*`, tests `tests/Feature/Kassa`. Docs: `docs/kassa-sklad.md`.
+- **«Касса и склад»** (separate mobile shop app): static client in `public/kassa/`, API `/api/kassa` (PIN login → bearer token via `kassa.auth`, owner-only via `kassa.owner`), models `app/Models/Kassa`, logic `app/Services/Kassa` (all stock/money/report math server-side), tables `kassa_*`, tests `tests/Feature/Kassa`. First run: web setup wizard (store, owner, strong PIN via `App\Rules\KassaPin`; `KASSA_SETUP_CODE` required in production). No demo data unless `KASSA_DEMO_ENABLED=true` outside production. Docs and deploy steps: `docs/kassa-sklad.md`.
 - **Inertia shared props**: `HandleInertiaRequests.php` — auth, permissions, notifications (low stock, receivables, payables aging), active shift, store profile, appVersion
 
 ## Middleware

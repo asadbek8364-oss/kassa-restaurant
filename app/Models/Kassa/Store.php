@@ -35,10 +35,17 @@ class Store extends Model
             ?? static::create(['name' => 'Мой магазин']);
     }
 
-    /** Строка магазина под блокировкой — сериализует нумерацию документов. */
+    /**
+     * Строка магазина под блокировкой — операции с остатками и нумерация документов идут строго по очереди.
+     * Первая команда транзакции — запись: в SQLite она сразу занимает блокировку записи (иначе две кассы
+     * могли бы прочитать одно и то же и получить ошибку при записи), в MySQL/PostgreSQL блокирует строку.
+     */
     public static function locked(): self
     {
-        static::current();
+        $touched = static::query()->orderBy('id')->limit(1)->update(['updated_at' => now()]);
+        if ($touched === 0) {
+            static::create(['name' => 'Мой магазин']);
+        }
 
         return static::query()->orderBy('id')->lockForUpdate()->firstOrFail();
     }

@@ -26,14 +26,19 @@ class StoreController extends KassaController
     /** Заменяет все данные демо-магазином; все сотрудники входят заново по демо-PIN. */
     public function demo(KassaDemoService $demo): JsonResponse
     {
+        abort_unless(KassaDemoService::allowed(), 404, 'Демо-данные на этом сервере отключены');
         $demo->load();
 
         return response()->json(['ok' => true, 'relogin' => true]);
     }
 
-    /** Удаляет товары и документы; сотрудники и название магазина остаются. */
+    /**
+     * Удаляет товары и документы; сотрудники и название магазина остаются.
+     * Нужна только для выхода из демо, поэтому на рабочем сервере недоступна.
+     */
     public function wipe(KassaDemoService $demo): JsonResponse
     {
+        abort_unless(KassaDemoService::allowed(), 404, 'Очистка данных на этом сервере отключена');
         $demo->wipe();
 
         return response()->json(['ok' => true]);

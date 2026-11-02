@@ -279,7 +279,7 @@
   const saveLocal = () => lsSet(LOCAL_KEY, JSON.stringify(L));
 
   // ---------------------------------------------------------------- Данные с сервера
-  const D = { me: null, store: { name: 'Касса и склад', is_demo: false }, employees: [], products: [], popular: [], suppliers: [], catalogAt: 0 };
+  const D = { me: null, store: { name: 'Касса и склад', is_demo: false }, features: { demo: false }, employees: [], products: [], popular: [], suppliers: [], catalogAt: 0 };
   let byId = new Map();
   function setProducts(list) {
     D.products = list.slice().sort((a, b) => a.name.localeCompare(b.name, 'ru'));
@@ -307,6 +307,7 @@
     D.employees = b.employees;
     D.popular = b.popular;
     D.suppliers = b.suppliers;
+    D.features = b.features || { demo: false };
     D.catalogAt = Date.now();
     setProducts(b.products);
     // в черновиках оставляем только товары, которые ещё есть в каталоге
@@ -327,10 +328,17 @@
     if ((c.stale || (c.data === undefined && !c.error)) && !c.promise) {
       const first = c.data === undefined;
       c.stale = false;
+      let changed = true;
       c.promise = api('GET', path)
-        .then((d) => { c.data = d; c.error = null; if (first) U.enter = true; })
+        .then((d) => {
+          // перерисовываем экран, только если с сервера пришло что-то новое: не мешаем вводу
+          changed = first || JSON.stringify(d) !== JSON.stringify(c.data);
+          c.data = d;
+          c.error = null;
+          if (first) U.enter = true;
+        })
         .catch((e) => { c.error = e; if (e.status !== 401 && !first) toast(e.message, 'bad'); })
-        .finally(() => { c.promise = null; if (D.me) render(); });
+        .finally(() => { c.promise = null; if (D.me && changed) render(); });
     }
     return c.data;
   }
@@ -342,7 +350,14 @@
   function refreshCatalog(force) {
     if (!D.me || catalogLoading || (!force && Date.now() - D.catalogAt < 20000)) return;
     catalogLoading = api('GET', '/products')
-      .then((d) => { setProducts(d.products); D.popular = d.popular; D.catalogAt = Date.now(); render(); })
+      .then((d) => {
+        const changed = JSON.stringify(d.products) !== JSON.stringify(D.products) || JSON.stringify(d.popular) !== JSON.stringify(D.popular);
+        D.catalogAt = Date.now();
+        if (!changed) return;
+        setProducts(d.products);
+        D.popular = d.popular;
+        render();
+      })
       .catch(() => { /* каталог обновится при следующем заходе */ })
       .finally(() => { catalogLoading = null; });
   }
@@ -1699,7 +1714,7 @@
       <section class="card">
         <div class="card-h"><h2 class="sec-title">Данные</h2>${D.store.is_demo ? html`<span class="pill warn">демо-данные</span>` : html`<span class="pill good">${ic('db')}на сервере</span>`}</div>
         <p class="sec-sub">Товары, чеки, приходы, возвраты и отчёты хранятся на сервере магазина и считаются там же — их видно с любого телефона после входа. На этом устройстве хранятся только черновики: корзина, незаконченный приход и пересчёт.</p>
-        ${isOwner() ? html`${D.store.is_demo ? html`<p class="sec-sub">Сейчас загружен пример магазина. Чтобы вести свой учёт, начните с чистого листа — сотрудники и название магазина сохранятся.</p>` : ''}
+        ${isOwner() && D.features.demo ? html`${D.store.is_demo ? html`<p class="sec-sub">Сейчас загружен пример магазина. Чтобы вести свой учёт, начните с чистого листа — сотрудники и название магазина сохранятся.</p>` : ''}
         <div class="btn-row"><button class="btn" data-act="resetDemo">Загрузить демо заново</button><button class="btn btn-danger" data-act="wipeData">Начать с чистого листа</button></div>` : ''}
       </section>`;
     },
@@ -1920,20 +1935,39 @@
       ${o.demo_hint ? html`<p class="hint center">${o.demo_hint}</p>` : ''}
     </section>`;
   }
-  function setupView() {
+  // Простые PIN отклоняет сервер; здесь та же проверка, чтобы подсказать сразу.
+  const COMMON_PINS = ['1212', '1122', '2580', '0852', '6969', '1004', '2000', '1010', '2001', '1313', '7777777', '121212', '112233', '123123', '654321', '696969'];
+  function pinProblem(pin) {
+    if (!/^\d{4,6}$/.test(pin)) return 'PIN — от 4 до 6 цифр';
+    const d = pin.split('').map(Number);
+    const same = d.every((x) => x === d[0]);
+    const up = d.every((x, i) => i === 0 || x - d[i - 1] === 1);
+    const down = d.every((x, i) => i === 0 || x - d[i - 1] === -1);
+    if (same || up || down || COMMON_PINS.includes(pin)) return 'PIN слишком простой: не используйте одинаковые цифры, цифры подряд (1234, 4321) и частые комбинации';
+    return '';
+  }
+  function setupView(o) {
+    if (!o.setup_ready) {
+      return html`<section class="auth">
+        <div class="auth-head"><span class="auth-logo">${ic('store', 'i-lg')}</span><div><h2>Установка закрыта</h2><p class="sec-sub">Касса ещё не настроена, но мастер первого запуска на этом сервере выключен.</p></div></div>
+        <section class="card"><p class="sec-sub">Администратору: задайте код установки в файле <span class="mono">.env</span> на сервере — строку <span class="mono">KASSA_SETUP_CODE=…</span> — и обновите эту страницу. Код понадобится один раз, при создании магазина.</p><button class="btn" data-act="authRetry">Обновить</button></section>
+      </section>`;
+    }
     return html`<section class="auth">
       <div class="auth-head"><span class="auth-logo">${ic('store', 'i-lg')}</span><div><h2>Первая настройка</h2><p class="sec-sub">Создайте магазин и владельца. Продавцов владелец добавит потом.</p></div></div>
       <form class="card" data-submit="setup" novalidate>
+        ${o.setup_code_required ? html`<div class="field"><label for="su-code">Код установки</label><input class="input mono" id="su-code" name="setup_code" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="KASSA_SETUP_CODE из .env"><span class="hint">Его задаёт администратор в файле .env на сервере. Нужен один раз.</span></div>` : ''}
         <div class="field"><label for="su-store">Название магазина</label><input class="input" id="su-store" name="store_name" maxlength="60" autocomplete="off" placeholder="Например, Mobi Aksessuar"></div>
         <div class="field"><label for="su-owner">Имя владельца</label><input class="input" id="su-owner" name="owner_name" maxlength="60" autocomplete="off" placeholder="Имя и фамилия"></div>
         <div class="field-grid">
-          <div class="field"><label for="su-pin">PIN, 4–6 цифр</label><input class="input" id="su-pin" name="pin" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div>
+          <div class="field"><label for="su-pin">Ваш PIN, 4–6 цифр</label><input class="input" id="su-pin" name="pin" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div>
           <div class="field"><label for="su-pin2">PIN ещё раз</label><input class="input" id="su-pin2" name="pin2" type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"></div>
         </div>
+        <p class="hint">Придумайте свой PIN: не 1111, не 1234 и не год рождения. Им вы будете входить в кассу и подтверждать действия владельца.</p>
         <p class="err" id="su-err" role="alert"></p>
         <button class="btn btn-primary btn-lg" type="submit">Создать магазин</button>
       </form>
-      <section class="card"><p class="sec-sub">Сначала хотите посмотреть, как всё работает? Сервер загрузит пример магазина с товарами и продажами за месяц.</p><button class="btn" data-act="setupDemo">${ic('db')}Загрузить демо-магазин</button></section>
+      ${o.demo_available ? html`<section class="card"><p class="sec-sub">Тестовый сервер: можно загрузить пример магазина с товарами и продажами за месяц.</p><button class="btn" data-act="setupDemo">${ic('db')}Загрузить демо-магазин</button></section>` : ''}
     </section>`;
   }
   function renderAuth() {
@@ -1956,7 +1990,7 @@
       view = html`<section class="auth"><div class="card">${skeleton(3)}<p class="hint center">Подключаемся к серверу…</p></div></section>`;
     } else if (a.options.needs_setup) {
       $('#title').textContent = 'Первая настройка';
-      view = setupView();
+      view = setupView(a.options);
     } else {
       $('#title').textContent = 'Вход';
       view = loginView(a.options);
@@ -2008,7 +2042,14 @@
     }
     // при обновлении данных с сервера сохраняем фокус и курсор в поле ввода
     const active = document.activeElement;
-    const keepId = active && active.id && $('#view').contains(active) ? active.id : null;
+    // поле в фокусе находим заново по id или по data-in + data-id (строки корзины, прихода, пересчёта)
+    let keepSel = null;
+    if (active && active !== document.body && $('#view').contains(active)) {
+      if (active.id) keepSel = '#' + active.id;
+      else if (active.dataset && active.dataset.in) keepSel = `[data-in="${active.dataset.in}"]` + (active.dataset.id ? `[data-id="${active.dataset.id}"]` : '');
+      else if (active.dataset && active.dataset.ch) keepSel = `[data-ch="${active.dataset.ch}"]` + (active.dataset.id ? `[data-id="${active.dataset.id}"]` : '');
+    }
+    const keepId = keepSel;
     let caret = null;
     try { if (keepId && active.selectionStart != null) caret = [active.selectionStart, active.selectionEnd]; } catch (e) { caret = null; }
     // поля, не связанные с состоянием (номер чека, код, настройки магазина), переживают фоновое обновление
@@ -2046,7 +2087,7 @@
       U.focus = null;
       if (f) f.focus();
     } else if (keepId && !entering) {
-      const f = document.getElementById(keepId);
+      const f = $('#view').querySelector(keepId);
       if (f) {
         f.focus();
         try { if (caret) f.setSelectionRange(caret[0], caret[1]); } catch (err) { /* поле без курсора */ }
@@ -2126,7 +2167,8 @@
     pinSubmit,
     setupDemo(el) {
       run(el, async () => {
-        const r = await api('POST', '/setup', { demo: true });
+        const code = $('#su-code');
+        const r = await api('POST', '/setup', { demo: true, setup_code: code ? code.value.trim() : null });
         setToken(r.token);
         await startSession();
         toast('Демо-магазин загружен. PIN владельца — 1111', 'ok');
@@ -2550,7 +2592,7 @@
       const name = String(f.name || '').trim();
       if (!name) { errEl.textContent = 'Введите имя сотрудника'; return; }
       const pin = String(f.pin || '').trim();
-      if ((!id || pin) && !/^\d{4,6}$/.test(pin)) { errEl.textContent = 'PIN — от 4 до 6 цифр'; return; }
+      if ((!id || pin) && pinProblem(pin)) { errEl.textContent = pinProblem(pin); return; }
       const payload = { name, role: f.role, phone: String(f.phone || '').trim(), pin: pin || null };
       run(form.querySelector('[type="submit"]'), async () => {
         try {
@@ -2582,13 +2624,21 @@
       const errEl = $('#su-err');
       const pin = String(f.pin || '');
       if (!String(f.store_name || '').trim() || !String(f.owner_name || '').trim()) { errEl.textContent = 'Заполните название магазина и имя владельца'; return; }
-      if (!/^\d{4,6}$/.test(pin)) { errEl.textContent = 'PIN — от 4 до 6 цифр'; return; }
+      if (form.querySelector('#su-code') && !String(f.setup_code || '').trim()) { errEl.textContent = 'Введите код установки'; return; }
+      const weak = pinProblem(pin);
+      if (weak) { errEl.textContent = weak; return; }
       if (pin !== f.pin2) { errEl.textContent = 'PIN не совпадает — введите ещё раз'; return; }
+      errEl.textContent = '';
       run(form.querySelector('[type="submit"]'), async () => {
-        const r = await api('POST', '/setup', { store_name: f.store_name, owner_name: f.owner_name, pin });
-        setToken(r.token);
-        await startSession();
-        toast('Магазин создан. Добавьте товары и продавцов', 'ok');
+        try {
+          const r = await api('POST', '/setup', { store_name: f.store_name, owner_name: f.owner_name, pin, setup_code: String(f.setup_code || '').trim() || null });
+          setToken(r.token);
+          await startSession();
+          toast('Магазин создан. Добавьте товары и продавцов', 'ok');
+        } catch (e) {
+          if (e.status === 422 || e.status === 403) { errEl.textContent = e.message; return; }
+          throw e;
+        }
       });
     },
   };
