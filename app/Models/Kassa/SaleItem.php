@@ -3,17 +3,19 @@
 namespace App\Models\Kassa;
 
 use App\Models\Kassa\Concerns\BelongsToStore;
+use App\Models\Kassa\Concerns\HasSyncUuid;
 use Illuminate\Database\Eloquent\Model;
 
 class SaleItem extends Model
 {
     use BelongsToStore;
+    use HasSyncUuid;
 
     public $timestamps = false;
 
     protected $table = 'kassa_sale_items';
 
-    protected $fillable = ['sale_id', 'product_id', 'name', 'qty', 'price', 'cost', 'shortage'];
+    protected $fillable = ['sale_id', 'product_id', 'name', 'qty', 'price', 'cost', 'shortage', 'uuid'];
 
     protected $casts = [
         'qty' => 'integer',

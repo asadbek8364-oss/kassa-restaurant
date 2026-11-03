@@ -29,6 +29,12 @@ class KassaDemoService
         'kassa_returns', 'kassa_sale_items', 'kassa_sales', 'kassa_products',
     ];
 
+    /** Данные ресторанов (заказы, меню, столики…) — удаляются вместе с магазинами. */
+    private const RESTAURANT_TABLES = [
+        'restaurant_print_jobs', 'restaurant_order_items', 'restaurant_kitchen_tickets', 'restaurant_orders',
+        'restaurant_dishes', 'restaurant_categories', 'restaurant_tables', 'restaurant_settings', 'restaurant_sync_logs',
+    ];
+
     // [категория, название, закупка, розница, остаток, мин. остаток, популярность]
     private const CATALOG = [
         ['chargers', 'Сетевое ЗУ Apple 20W USB-C', 165000, 249000, 14, 4, 6],
@@ -359,10 +365,10 @@ class KassaDemoService
         });
     }
 
-    /** Удаляет все магазины кассы со всеми данными, сотрудниками и входами. */
+    /** Удаляет все магазины кассы со всеми данными, сотрудниками и входами (и данные ресторанов этих магазинов). */
     private function wipeAll(): void
     {
-        foreach ([...self::DATA_TABLES, 'kassa_tokens', 'kassa_employees', 'kassa_stores'] as $table) {
+        foreach ([...self::RESTAURANT_TABLES, ...self::DATA_TABLES, 'kassa_tokens', 'kassa_employees', 'kassa_stores'] as $table) {
             DB::table($table)->delete();
         }
         app(StoreContext::class)->forget();

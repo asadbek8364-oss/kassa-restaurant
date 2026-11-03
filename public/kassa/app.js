@@ -31,7 +31,7 @@
     card: { name: 'Карта', icon: 'card' },
     qr: { name: 'QR', icon: 'qr' },
   };
-  const ROLES = { owner: 'Владелец', seller: 'Продавец' };
+  const ROLES = { owner: 'Владелец', seller: 'Продавец', admin: 'Администратор', waiter: 'Официант', cook: 'Повар' };
   const REASONS = ['Брак', 'Не подошёл', 'Передумал', 'Другое'];
   const PERIODS = { today: 'Сегодня', week: 'Неделя', month: 'Месяц', all: 'Всё время' };
   const SORTS = [

@@ -9,6 +9,7 @@ use App\Rules\KassaPin;
 use App\Services\Kassa\KassaDemoService;
 use App\Support\Kassa\Presenter;
 use App\Support\Kassa\StoreContext;
+use App\Support\Restaurant\Apps;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -36,12 +37,12 @@ class AuthController extends KassaController
             'store' => Presenter::store($store),
             'stores' => Store::orderBy('id')->get(['id', 'name'])->map(fn ($s) => ['id' => $s->id, 'name' => $s->name])->all(),
             'needs_setup' => ! Employee::withoutGlobalScopes()->exists(),
-            'employees' => Employee::where('active', true)->orderByRaw("CASE WHEN role = 'owner' THEN 0 ELSE 1 END")->orderBy('name')
+            'employees' => Employee::where('active', true)->whereIn('role', Apps::roles('kassa'))->orderByRaw("CASE WHEN role = 'owner' THEN 0 ELSE 1 END")->orderBy('name')
                 ->get(['id', 'name', 'role'])->map(fn ($e) => ['id' => $e->id, 'name' => $e->name, 'role' => $e->role])->all(),
             'demo_hint' => $store->is_demo && KassaDemoService::allowed() ? KassaDemoService::hint() : null,
             'demo_available' => KassaDemoService::allowed(),
-            'setup_code_required' => $this->setupState()['required'],
-            'setup_ready' => $this->setupState()['ready'],
+            'setup_code_required' => self::setupState()['required'],
+            'setup_ready' => self::setupState()['ready'],
         ]);
     }
 
@@ -57,7 +58,7 @@ class AuthController extends KassaController
      * Код установки обязателен, если задан KASSA_SETUP_CODE или сервер рабочий (APP_ENV=production).
      * На рабочем сервере без кода мастер закрыт — так магазин не займёт посторонний.
      */
-    private function setupState(): array
+    public static function setupState(): array
     {
         $code = (string) config('kassa.setup_code');
         $production = app()->environment('production');
@@ -72,7 +73,7 @@ class AuthController extends KassaController
             return response()->json(['message' => 'Касса уже настроена — войдите по PIN'], 409);
         }
 
-        $setup = $this->setupState();
+        $setup = self::setupState();
         if (! $setup['ready']) {
             return response()->json(['message' => 'Мастер установки закрыт: задайте KASSA_SETUP_CODE в файле .env на сервере'], 403);
         }
@@ -124,6 +125,10 @@ class AuthController extends KassaController
             throw ValidationException::withMessages(['pin' => 'Неверный PIN']);
         }
         RateLimiter::clear($key);
+        if (! Apps::allows('kassa', $employee->role)) {
+            // официант и повар работают в своих приложениях ресторана
+            throw ValidationException::withMessages(['employee_id' => 'Ваш интерфейс — '.Apps::NAMES[Apps::home($employee->role)].': '.Apps::url(Apps::home($employee->role))]);
+        }
 
         $store = $employee->isOwner() ? $this->storeFor($data['store_id'] ?? null) : Store::find($employee->store_id);
         if (! $store) {
