@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Ресторан — демо-версия</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Демо-версия ресторанной системы: приложения официанта, кухни и админки прямо в браузере — без установки и регистрации. Руководство пользователя и PDF.">
+<meta name="theme-color" content="#141a2e">
+<link rel="icon" href="assets/icons/admin.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/launcher.css">
+</head>
+<body>
+<div class="ln">
+  <aside class="ln-side">
+    <a class="ln-brand" href="#overview">
+      <img src="assets/icons/admin.svg" alt="" width="40" height="40">
+      <span><b>Ресторан</b><small>демо-версия</small></span>
+    </a>
+    <nav class="ln-nav" id="nav" aria-label="Разделы демо-версии"></nav>
+    <div class="ln-side-foot">
+      <a class="ln-btn ln-btn-accent" href="restaurant-guide.pdf" download>Руководство (PDF)</a>
+      <button class="ln-btn" data-act="reset">Начать демо заново</button>
+    </div>
+  </aside>
+  <main class="ln-main">
+    <section class="ln-view ln-overview" id="view-overview" hidden></section>
+    <section class="ln-view ln-app" id="view-app" hidden>
+      <header class="ln-bar">
+        <div class="ln-bar-title"><h1 id="app-title"></h1><p id="app-sub"></p></div>
+        <div class="ln-bar-tools" id="app-tools"></div>
+      </header>
+      <div class="ln-stage" id="stage"></div>
+    </section>
+    <section class="ln-view ln-printer" id="view-printer" hidden></section>
+    <section class="ln-view ln-app" id="view-guide" hidden>
+      <header class="ln-bar">
+        <div class="ln-bar-title"><h1>Руководство пользователя</h1><p>Официант, кухня, администратор, принтер, синхронизация, установка</p></div>
+        <div class="ln-bar-tools">
+          <a class="ln-btn ln-btn-accent" href="restaurant-guide.pdf" download>Скачать PDF</a>
+          <a class="ln-btn" href="guide.html" target="_blank" rel="noopener">Открыть отдельно</a>
+        </div>
+      </header>
+      <div class="ln-stage"><iframe class="ln-frame ln-frame-doc" id="guide-frame" title="Руководство пользователя" loading="lazy"></iframe></div>
+    </section>
+  </main>
+</div>
+<div class="ln-toast" id="toast" role="status" aria-live="polite"></div>
+<noscript><p style="padding:24px">Для работы демо-версии включите JavaScript.</p></noscript>
+<script src="assets/demo-server.js"></script>
+<script src="assets/launcher.js"></script>
+</body>
+</html>
