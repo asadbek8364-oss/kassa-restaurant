@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Фон значка: синий квадрат с узором из icon.svg веб-кассы -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <path android:fillColor="#1D3BB5" android:pathData="M0,0h512v512h-512z" />
+    <path
+        android:pathData="M136,136h240v240h-240zM256,86L426,256L256,426L86,256Z"
+        android:strokeWidth="6"
+        android:strokeAlpha="0.12"
+        android:strokeColor="#FFFFFF" />
+</vector>

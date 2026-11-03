@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Снимки штрих-кодов для распознавания по фото -->
+    <cache-path name="photos" path="photos/" />
+</paths>

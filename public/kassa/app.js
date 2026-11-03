@@ -359,11 +359,54 @@
   }
   const deviceStore = () => { const v = Number(lsGet(STORE_KEY)); return v > 0 ? v : null; };
 
-  // Очередь: чек пробит, но сервер не ответил. Уходит на сервер под тем же сотрудником, в том же магазине.
-  let Q = (() => {
-    try { const q = JSON.parse(lsGet(QUEUE_KEY) || '[]'); return Array.isArray(q) ? q : []; } catch (e) { return []; }
+  // Приложения-обёртки (mobile/android, mobile/ios) дают мост: открыть настройки приложения
+  // и держать копию очереди в памяти телефона — WebView пишет localStorage на диск не сразу.
+  const NATIVE = (() => {
+    try {
+      const a = window.KassaAndroid;
+      if (a) return { platform: 'android', openSettings: () => a.openAppSettings(), saveQueue: (j) => a.saveQueue(j), loadQueue: () => a.loadQueue() };
+      const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.kassa;
+      if (h) {
+        return {
+          platform: 'ios',
+          openSettings: () => h.postMessage({ action: 'openSettings' }),
+          saveQueue: (j) => h.postMessage({ action: 'saveQueue', queue: j }),
+          loadQueue: () => window.__kassaQueueBackup || '[]',
+        };
+      }
+    } catch (e) { /* обычный браузер */ }
+    return null;
   })();
-  const saveQueue = () => lsSet(QUEUE_KEY, Q.length ? JSON.stringify(Q) : null);
+
+  // Очередь: чек пробит, но сервер не ответил. Уходит на сервер под тем же сотрудником, в том же магазине.
+  let restoredFromNative = 0;
+  let Q = (() => {
+    let q = [];
+    try { q = JSON.parse(lsGet(QUEUE_KEY) || '[]'); } catch (e) { q = []; }
+    if (!Array.isArray(q)) q = [];
+    // Копия из обёртки дополняет очередь чеками, которые не успели попасть в localStorage.
+    // Уже отправленный чек из устаревшей копии безопасен: сервер вернёт его как повтор (client_uuid).
+    if (NATIVE) {
+      try {
+        const have = new Set(q.map((e) => e.client_uuid));
+        const backup = JSON.parse(NATIVE.loadQueue() || '[]');
+        if (Array.isArray(backup)) {
+          backup.forEach((e) => {
+            if (e && e.client_uuid && Array.isArray(e.items) && !have.has(e.client_uuid)) { q.push(e); restoredFromNative++; }
+          });
+        }
+      } catch (e) { /* копии нет */ }
+    }
+    return q;
+  })();
+  const saveQueue = () => {
+    const json = Q.length ? JSON.stringify(Q) : null;
+    lsSet(QUEUE_KEY, json);
+    if (NATIVE) {
+      try { NATIVE.saveQueue(json || '[]'); } catch (e) { /* без копии в обёртке */ }
+    }
+  };
+  if (restoredFromNative) saveQueue();
   const SYNC = { busy: false, pauseUntil: 0 };
   const myQueue = () => (D.me ? Q.filter((e) => e.employee_id === D.me.id) : []);
   function pendingQty() {
@@ -874,8 +917,10 @@
     }
   }
 
+  const camDenied = (e) => !!e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
   function camError(e) {
     const n = e && e.name;
+    if (camDenied(e) && NATIVE) return 'Нет доступа к камере. Разрешите камеру для приложения «Касса и склад» в настройках телефона или введите цифры вручную.';
     if (n === 'NotAllowedError' || n === 'SecurityError') return 'Нет доступа к камере. Разрешите его в настройках браузера, сфотографируйте штрих-код или введите цифры вручную.';
     if (n === 'NotFoundError' || n === 'OverconstrainedError' || n === 'NoCamera') return 'Камера не найдена. Сфотографируйте штрих-код или введите цифры вручную.';
     return 'Камера здесь недоступна. Сфотографируйте штрих-код или введите цифры вручную.';
@@ -1071,7 +1116,7 @@
       try {
         await this.start();
       } catch (e) {
-        if (this.live) this.status(camError(e));
+        if (this.live) this.status(camError(e), camDenied(e));
       }
     },
     async start() {
@@ -1089,7 +1134,7 @@
         this.reader = new dec.Z.BrowserMultiFormatReader(dec.hints, 250);
         this.status('Наведите камеру на штрих-код');
         this.reader.decodeFromConstraints(constraints, video, (res) => { if (res) this.hit(res.getText()); })
-          .catch((e) => { if (this.live) this.status(camError(e)); });
+          .catch((e) => { if (this.live) this.status(camError(e), camDenied(e)); });
         return;
       }
       this.stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -1128,9 +1173,9 @@
       const r = o.onCode(code) || {};
       setHTML($('#scan-last'), html`<span class="${r.ok ? 'scan-ok' : 'scan-bad'}">${r.msg || code}</span>`);
     },
-    status(t) {
+    status(t, settings) {
       const el = $('#scan-status');
-      el.textContent = t || '';
+      setHTML(el, t ? html`<span>${t}</span>${settings && NATIVE ? html`<button class="btn btn-sm" data-act="nativeSettings">Открыть настройки</button>` : ''}` : '');
       el.hidden = !t;
     },
     stopStream() {
@@ -1162,7 +1207,7 @@
     incQ: '', refSale: null, refQty: {}, refReason: 'Не подошёл',
     audQ: '', audCat: 'all', audDiff: false,
     period: 'today', jType: 'all', jQ: '', jQText: '', jLimit: 80, jLast: null,
-    fcThr: 7, fcDead: 30, stPeriod: 'today',
+    fcThr: 7, fcDead: 30, stPeriod: 'today', saleCat: 'all',
     scanCode: '', backTo: 'home', flash: null, flashNew: false, focus: null, enter: false, pop: null, busy: false,
     seenSale: undefined,
     auth: null,
@@ -1426,27 +1471,58 @@
     if (r < t) return html`<span class="bad">не хватает ${num(t - r)}</span>`;
     return money(r - t);
   }
+  // Планшет (ширина от 768px): касса в две колонки — каталог слева, корзина справа.
+  const WIDE = window.matchMedia ? window.matchMedia('(min-width: 768px)') : { matches: false };
+  const isWide = () => !!WIDE.matches;
+  const saleTile = (p) => html`<button class="tile" data-act="addCart" data-id="${p.id}"${raw(p.stock <= 0 ? ' aria-disabled="true"' : '')}><span class="tile-name">${p.name}</span><span class="tile-foot"><span class="tile-price">${num(p.sell_price)}</span><span class="tile-stock">${p.stock > 0 ? p.stock + ' шт' : 'нет'}</span></span></button>`;
+  /** Весь каталог плитками (планшет): поиск и категория фильтруют, без фильтра — сначала популярные. */
+  function saleGrid() {
+    const q = U.saleQ.trim();
+    let list = q ? searchProducts(q) : D.products.slice();
+    if (U.saleCat !== 'all') list = list.filter((p) => p.category === U.saleCat);
+    if (!q) {
+      const rank = new Map(D.popular.map((id, i) => [id, i]));
+      const r = (p) => (rank.has(p.id) ? rank.get(p.id) : 1e6) + (p.stock > 0 ? 0 : 2e6);
+      list.sort((a, b) => r(a) - r(b) || a.name.localeCompare(b.name, 'ru'));
+    }
+    if (!list.length) return empty(D.products.length ? 'search' : 'box', D.products.length ? 'Ничего не найдено — измените поиск или категорию' : 'Добавьте товары в каталог');
+    return html`<div class="tiles grid">${list.map(saleTile)}</div>`;
+  }
+  const checkoutBox = (key) => html`<div class="checkout-sum"><span>Итого</span><b>${cnt(cartTotal(), key)}&nbsp;сум</b></div><button class="btn btn-primary btn-lg${U.busy ? ' busy' : ''}" data-act="checkout"${raw(U.busy ? ' disabled' : '')}>${ic(NET.offline ? 'offline' : 'receipt')}${NET.offline ? 'Пробить без связи' : 'Пробить чек'}</button>`;
   SCREENS.sale = {
     title: 'Продажа', tab: true, catalog: true,
     view() {
       const c = L.cart;
       const lines = cartLines();
       const total = cartTotal();
-      const pop = D.popular.map(P).filter((p) => p && p.stock > 0).slice(0, 12);
+      const wide = isWide();
       const payIdx = Object.keys(PAY).indexOf(c.payment);
-      return html`
-      <div class="search-row">
+      const search = html`<div class="search-row">
         <label class="search"><span class="sr-only">Штрих-код или название</span>${ic('search')}<input class="input" id="sale-q" type="search" enterkeyhint="done" autocomplete="off" placeholder="Штрих-код или название" value="${U.saleQ}" data-in="saleQ" data-enter="saleEnter"></label>
         <button class="icon-btn accent" data-act="scanSale" aria-label="Сканировать камерой">${ic('scan')}</button>
-      </div>
-      <div class="suggest" id="sale-suggest">${suggestList(U.saleQ, 'addCart')}</div>
-      <section class="stack">
-        <div class="card-h"><h2 class="sec-title">Популярные товары</h2><span class="sec-sub">нажмите, чтобы добавить</span></div>
-        <div class="tiles">${pop.length ? pop.map((p) => html`<button class="tile" data-act="addCart" data-id="${p.id}"><span class="tile-name">${p.name}</span><span class="tile-foot"><span class="tile-price">${num(p.sell_price)}</span><span class="tile-stock">${p.stock} шт</span></span></button>`) : html`<div class="empty">${ic('box')}<span>Добавьте товары в каталог</span></div>`}</div>
-      </section>
+      </div>`;
+      let catalog;
+      if (wide) {
+        catalog = html`${search}
+        <div class="chips" aria-label="Категории">
+          <button class="chip${U.saleCat === 'all' ? ' on' : ''}" data-act="saleCat" data-v="all">Все</button>
+          ${CATS.map((x) => html`<button class="chip${U.saleCat === x.id ? ' on' : ''}" data-act="saleCat" data-v="${x.id}">${x.name}</button>`)}
+        </div>
+        <section class="stack"><div class="card-h"><h2 class="sec-title">Каталог</h2><span class="sec-sub">нажмите, чтобы добавить в чек</span></div><div id="sale-grid">${saleGrid()}</div></section>`;
+      } else {
+        const pop = D.popular.map(P).filter((p) => p && p.stock > 0).slice(0, 12);
+        catalog = html`${search}
+        <div class="suggest" id="sale-suggest">${suggestList(U.saleQ, 'addCart')}</div>
+        <section class="stack">
+          <div class="card-h"><h2 class="sec-title">Популярные товары</h2><span class="sec-sub">нажмите, чтобы добавить</span></div>
+          <div class="tiles">${pop.length ? pop.map(saleTile) : html`<div class="empty">${ic('box')}<span>Добавьте товары в каталог</span></div>`}</div>
+        </section>`;
+      }
+      return html`<div class="sale-layout"><div class="sale-main">${catalog}</div>
+      <div class="sale-side">
       <section class="card flush">
         <div class="card-h"><h2 class="sec-title">Корзина${lines.length ? html` <span class="faint">· ${pcs(cartUnits())}</span>` : ''}</h2>${lines.length ? html`<button class="link" data-act="clearCart">Очистить</button>` : ''}</div>
-        <div class="rows">${lines.length ? lines.map(cartLine) : empty('cart', 'Корзина пуста. Отсканируйте штрих-код или выберите товар выше.')}</div>
+        <div class="rows">${lines.length ? lines.map(cartLine) : empty('cart', wide ? 'Корзина пуста. Отсканируйте штрих-код или выберите товар в каталоге.' : 'Корзина пуста. Отсканируйте штрих-код или выберите товар выше.')}</div>
       </section>
       ${lines.length ? html`
       <section class="card">
@@ -1468,11 +1544,13 @@
         ${NET.offline
           ? html`<p class="note warn">${ic('offline')}<span>Нет связи с сервером: чек сохранится на этом устройстве и уйдёт на сервер сам, когда появится интернет.</span></p>`
           : html`<p class="hint">Окончательную сумму, сдачу и списание со склада считает сервер при пробитии чека.</p>`}
-      </section>` : ''}`;
+      </section>
+      ${wide ? html`<div class="checkout-inline">${checkoutBox('cart-total-side')}</div>` : ''}` : ''}
+      </div></div>`;
     },
     bar() {
-      if (!cartLines().length) return '';
-      return html`<div class="checkout-inner"><div class="checkout-sum"><span>Итого</span><b>${cnt(cartTotal(), 'cart-total')}&nbsp;сум</b></div><button class="btn btn-primary btn-lg${U.busy ? ' busy' : ''}" data-act="checkout"${raw(U.busy ? ' disabled' : '')}>${ic(NET.offline ? 'offline' : 'receipt')}${NET.offline ? 'Пробить без связи' : 'Пробить чек'}</button></div>`;
+      if (isWide() || !cartLines().length) return '';
+      return html`<div class="checkout-inner">${checkoutBox('cart-total')}</div>`;
     },
   };
 
@@ -2747,8 +2825,9 @@
       if (!r.ok) { toast(r.msg, 'bad'); shake(el); return; }
       if (el.classList.contains('sug')) U.saleQ = '';
       render();
-      flyTo(from, $('#bar .checkout-sum') || $('.tab[data-to="sale"] .i'));
+      flyTo(from, $('.checkout-inline .checkout-sum') || $('#bar .checkout-sum') || $('.tab[data-to="sale"] .i'));
     },
+    saleCat(el) { U.saleCat = el.dataset.v; render(); },
     cartQty(el) {
       const line = L.cart.items.find((l) => l.pid === Number(el.dataset.id));
       if (line) setCartQty(line.pid, line.qty + Number(el.dataset.d));
@@ -3000,11 +3079,16 @@
     },
     newProductCode(el) { productForm(null, { barcode: el.dataset.code }); },
     scanClose() { Scan.close(); },
+    nativeSettings() { if (NATIVE) NATIVE.openSettings(); },
   };
 
   let jTimer = 0;
   const IN = {
-    saleQ(el) { U.saleQ = el.value; setHTML($('#sale-suggest'), suggestList(U.saleQ, 'addCart')); },
+    saleQ(el) {
+      U.saleQ = el.value;
+      if (isWide()) setHTML($('#sale-grid'), saleGrid());
+      else setHTML($('#sale-suggest'), suggestList(U.saleQ, 'addCart'));
+    },
     customer(el) { L.cart.customer = el.value; saveLocal(); },
     received(el) {
       L.cart.received = el.value.replace(/[^\d]/g, '');
@@ -3284,6 +3368,9 @@
       render();
       heartbeat();
     });
+    const onWide = () => { if (D.me) render(); };
+    if (WIDE.addEventListener) WIDE.addEventListener('change', onWide);
+    else if (WIDE.addListener) WIDE.addListener(onWide);
     window.addEventListener('online', () => setTimeout(heartbeat, 500));
     window.addEventListener('offline', () => setNet(true));
     setInterval(heartbeat, 15000);
@@ -3299,6 +3386,20 @@
       try { L = JSON.parse(e.newValue); if (D.me) render(); } catch (err) { /* чужой формат — игнорируем */ }
     });
   }
+
+  // Кнопка «Назад» в Android-обёртке: закрывает диалог, сканер или лист, затем ведёт к главной.
+  // false — приложению нечего закрывать, обёртка сворачивается.
+  window.kassaBack = () => {
+    if (!$('#dialog').hidden) { closeDialog(); return true; }
+    if (!$('#scan').hidden) { Scan.close(); return true; }
+    if (!$('#sheet').hidden) { closeSheet(); return true; }
+    if (D.me && route() !== 'home') {
+      if (SCREENS[route()].tab) go('home');
+      else ACT.back();
+      return true;
+    }
+    return false;
+  };
 
   async function init() {
     document.documentElement.lang = 'ru';

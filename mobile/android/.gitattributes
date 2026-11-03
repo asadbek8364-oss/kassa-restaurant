@@ -1,0 +1,4 @@
+# Скрипты Gradle Wrapper: Windows-версии нужны переводы строк CRLF
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary

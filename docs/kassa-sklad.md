@@ -5,6 +5,8 @@
 Клиент — статические файлы в `public/kassa/`. Данные хранятся на сервере этого Laravel-приложения
 (таблицы `kassa_*`, по умолчанию в одном файле SQLite), там же выполняются все расчёты и прогнозы.
 Если сервер недоступен, продавец продолжает пробивать чеки — они копятся на телефоне и уходят на сервер сами.
+Планшетная вёрстка, установка на главный экран (PWA) и приложения-обёртки для Android и iPhone — в
+[`docs/kassa-mobile.md`](kassa-mobile.md).
 
 ## Развёртывание на чистом сервере (Ubuntu 24.04)
 
@@ -328,3 +330,4 @@ php artisan test --filter=Kassa
 | `app/Http/Middleware/AuthenticateKassa.php`, `EnsureKassaOwner.php` | Вход по токену, права владельца |
 | `tests/Feature/Kassa/` | Тесты: API (`KassaApiTest`), магазины (`KassaMultiStoreTest`), прогнозы (`KassaForecastTest`), офлайн-чеки (`KassaOfflineSyncTest`) |
 | `public/kassa/` | Клиент: `index.html`, `styles.css`, `app.js`, офлайн-оболочка `sw.js`, манифест и иконки |
+| `mobile/android`, `mobile/ios` | Приложения-обёртки (Kotlin WebView, Swift WKWebView), сборка — `docs/kassa-mobile.md` |

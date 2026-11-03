@@ -1,18 +1,26 @@
 {
+  "id": "/kassa/",
   "name": "Касса и склад",
   "short_name": "Касса",
-  "description": "Продажи, склад, приход, возвраты и отчёты магазина аксессуаров для телефонов.",
+  "description": "Продажи (в том числе без связи), склад, приход, возвраты, отчёты и прогнозы магазинов аксессуаров для телефонов.",
   "lang": "ru",
+  "dir": "ltr",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "any",
   "background_color": "#eef1f6",
   "theme_color": "#1d3bb5",
   "categories": ["business", "finance", "shopping"],
   "icons": [
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
-    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Продажа", "short_name": "Продажа", "url": "./index.html#sale", "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Приход", "short_name": "Приход", "url": "./index.html#income", "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Прогнозы", "short_name": "Прогнозы", "url": "./index.html#forecast", "icons": [{ "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }] }
   ]
 }
