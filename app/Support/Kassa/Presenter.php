@@ -17,7 +17,7 @@ class Presenter
 {
     public static function store(Store $s): array
     {
-        return ['name' => $s->name, 'address' => $s->address, 'is_demo' => $s->is_demo];
+        return ['id' => $s->id, 'name' => $s->name, 'address' => $s->address, 'is_demo' => $s->is_demo];
     }
 
     public static function employee(?Employee $e): ?array
@@ -70,7 +70,23 @@ class Presenter
             'total' => $s->total,
             'units' => (int) ($s->units ?? $s->items->sum('qty')),
             'has_refund' => (bool) ($s->refunds_count ?? $s->refunds->isNotEmpty()),
+            'offline' => $s->isOffline(),
+            'conflict' => self::saleConflict($s),
         ];
+    }
+
+    /**
+     * Расхождение офлайн-чека: при синхронизации на складе не хватило товара
+     * или сумма на устройстве не совпала с ценами сервера.
+     */
+    public static function saleConflict(Sale $s): bool
+    {
+        if (! $s->isOffline()) {
+            return false;
+        }
+        $short = $s->shortage_units ?? ($s->relationLoaded('items') ? $s->items->sum('shortage') : $s->items()->sum('shortage'));
+
+        return (int) $short > 0 || ($s->client_total !== null && $s->client_total !== $s->total);
     }
 
     public static function sale(Sale $s): array
@@ -80,6 +96,8 @@ class Presenter
         return self::saleSummary($s) + [
             'received' => $s->received,
             'change' => $s->change_amount,
+            'synced_at' => Clock::iso($s->synced_at),
+            'client_total' => $s->client_total,
             'items' => $s->items->map(function ($i) {
                 $returned = (int) $i->refundItems->sum('qty');
 
@@ -92,6 +110,7 @@ class Presenter
                     'sum' => $i->qty * $i->price,
                     'returned' => $returned,
                     'returnable' => $i->qty - $returned,
+                    'shortage' => $i->shortage,
                 ];
             })->values()->all(),
             'refunds' => $s->refunds->sortBy('id')->map(fn (Refund $r) => [

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Kassa;
 
 use App\Models\Kassa\Refund;
 use App\Models\Kassa\Sale;
+use App\Models\Kassa\Store;
 use App\Services\Kassa\KassaService;
 use App\Support\Kassa\Presenter;
 use Illuminate\Http\JsonResponse;
@@ -29,7 +30,7 @@ class RefundController extends KassaController
     public function store(Request $request, KassaService $kassa): JsonResponse
     {
         $data = $this->check($request, [
-            'sale_id' => 'required|integer|exists:kassa_sales,id',
+            'sale_id' => ['required', 'integer', Rule::exists('kassa_sales', 'id')->where('store_id', Store::current()->id)],
             'items' => 'required|array|min:1|max:100',
             'items.*.sale_item_id' => 'required|integer',
             'items.*.qty' => 'required|integer|min:1|max:10000',

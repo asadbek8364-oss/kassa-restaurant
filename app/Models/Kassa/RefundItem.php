@@ -2,10 +2,13 @@
 
 namespace App\Models\Kassa;
 
+use App\Models\Kassa\Concerns\BelongsToStore;
 use Illuminate\Database\Eloquent\Model;
 
 class RefundItem extends Model
 {
+    use BelongsToStore;
+
     public $timestamps = false;
 
     protected $table = 'kassa_return_items';

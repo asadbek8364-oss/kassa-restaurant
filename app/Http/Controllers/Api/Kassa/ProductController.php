@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Kassa;
 
 use App\Models\Kassa\Product;
+use App\Services\Kassa\KassaForecastService;
 use App\Services\Kassa\KassaReportService;
 use App\Services\Kassa\KassaService;
 use App\Support\Kassa\Ean13;
@@ -14,7 +15,11 @@ use Illuminate\Validation\ValidationException;
 
 class ProductController extends KassaController
 {
-    public function __construct(private readonly KassaService $kassa, private readonly KassaReportService $reports) {}
+    public function __construct(
+        private readonly KassaService $kassa,
+        private readonly KassaReportService $reports,
+        private readonly KassaForecastService $forecasts,
+    ) {}
 
     public function index(): JsonResponse
     {
@@ -26,7 +31,7 @@ class ProductController extends KassaController
 
     public function show(Product $product): JsonResponse
     {
-        return response()->json($this->reports->productDetail($product));
+        return response()->json($this->reports->productDetail($product) + ['forecast' => $this->forecasts->product($product)]);
     }
 
     public function barcode(): JsonResponse

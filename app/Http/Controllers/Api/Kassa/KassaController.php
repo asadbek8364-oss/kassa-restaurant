@@ -21,6 +21,7 @@ abstract class KassaController extends Controller
         'in' => 'Недопустимое значение поля «:attribute»',
         'exists' => 'Не найдено: «:attribute»',
         'uuid' => 'Неверный идентификатор операции',
+        'date' => 'Поле «:attribute» должно быть датой',
         'digits_between' => 'PIN — от :min до :max цифр',
         'min' => [
             'numeric' => '«:attribute» не может быть меньше :min',
@@ -65,6 +66,15 @@ abstract class KassaController extends Controller
         'owner_name' => 'имя владельца',
         'period' => 'период',
         'type' => 'тип операции',
+        'sales' => 'чеки',
+        'client_uuid' => 'идентификатор чека',
+        'store_id' => 'магазин',
+        'sold_at' => 'время продажи',
+        'client_total' => 'сумма на устройстве',
+        'items.*.name' => 'название товара',
+        'items.*.price' => 'цена',
+        'threshold' => 'порог',
+        'dead_days' => 'срок без продаж',
     ];
 
     protected function me(Request $request): Employee
@@ -74,6 +84,11 @@ abstract class KassaController extends Controller
 
     protected function check(Request $request, array $rules): array
     {
-        return validator($request->all(), $rules, self::MESSAGES, self::ATTRIBUTES)->validate();
+        return $this->checkData($request->all(), $rules);
+    }
+
+    protected function checkData(array $data, array $rules): array
+    {
+        return validator($data, $rules, self::MESSAGES, self::ATTRIBUTES)->validate();
     }
 }

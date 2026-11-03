@@ -1,14 +1,18 @@
 /*
- * «Касса и склад» — касса и складской учёт для магазина аксессуаров для телефонов.
+ * «Касса и склад» — касса и складской учёт для магазинов аксессуаров для телефонов.
  * Данные и все расчёты — на сервере (Laravel, /api/kassa): остатки, суммы чеков, сдача,
- * возвраты, отчёты и журнал. Сотрудник входит по PIN. На устройстве хранятся только
- * черновики: корзина, незаконченный приход и пересчёт инвентаризации.
+ * возвраты, отчёты, прогнозы и журнал. Сотрудник входит по PIN; владелец переключается между магазинами.
+ * На устройстве хранятся черновики (по магазину), копия каталога для работы без связи
+ * и очередь чеков, пробитых без связи: они уходят на сервер сами, повтор не создаёт дублей (client_uuid).
  */
 'use strict';
 (function () {
   const API = String(window.KASSA_API || location.origin + '/api/kassa').replace(/\/+$/, '');
   const TOKEN_KEY = 'kassa-sklad:token';
-  const LOCAL_KEY = 'kassa-sklad:drafts:v2';
+  const LOCAL_KEY = 'kassa-sklad:drafts:v2'; // + ':<id магазина>'
+  const STORE_KEY = 'kassa-sklad:store'; // магазин этого устройства (экран входа)
+  const QUEUE_KEY = 'kassa-sklad:queue:v1'; // чеки, пробитые без связи
+  const SNAP_KEY = 'kassa-sklad:snapshot:v1'; // копия каталога и входа для запуска без связи
   const DAY = 864e5;
   const ZXING_URL = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
 
@@ -61,10 +65,15 @@
     ['income', 'Приход', 'income'],
     ['refund', 'Возврат', 'refund'],
     ['audit', 'Инвентаризация', 'audit'],
+    ['forecast', 'Прогнозы', 'trend'],
     ['journal', 'Журнал', 'journal'],
     ['staff', 'Сотрудники', 'users'],
     ['scanner', 'Сканер', 'scan'],
+    ['stores', 'Магазины', 'store', 'owner'],
   ];
+  const FC_THRESHOLDS = [[3, '3 дня'], [7, '7 дней'], [14, '14 дней']];
+  const FC_DEAD = [[30, '30+ дней'], [60, '60+'], [90, '90+']];
+  const STORE_PERIODS = { today: 'Сегодня', week: 'Неделя', month: 'Месяц' };
 
   // ---------------------------------------------------------------- Иконки
   const ICONS = {
@@ -106,6 +115,11 @@
     shield: '<path d="M12 3a12 12 0 0 0 8.5 3A12 12 0 0 1 12 21 12 12 0 0 1 3.5 6 12 12 0 0 0 12 3"/>',
     headphones: '<path d="M4 15a2 2 0 0 1 2-2h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zM15 15a2 2 0 0 1 2-2h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2z"/><path d="M4 15v-3a8 8 0 0 1 16 0v3"/>',
     star: '<path d="m12 17.75-6.17 3.25 1.18-6.88-5-4.87 6.9-1L12 2l3.09 6.25 6.9 1-5 4.87 1.18 6.88z"/>',
+    trend: '<path d="m3 17 6-6 4 4 8-8"/><path d="M14 7h7v7"/>',
+    offline: '<path d="M12 18h.01M9.17 15.17a4 4 0 0 1 5.66 0M6.34 12.34a8 8 0 0 1 3.5-2.06M14.5 10.3a8 8 0 0 1 3.16 2.04M3.51 9.51a12 12 0 0 1 3.4-2.4M10.8 6.06A12 12 0 0 1 20.49 9.5M3 3l18 18"/>',
+    sync: '<path d="M20 11A8.1 8.1 0 0 0 4.5 9M4 5v4h4"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4"/>',
+    down: '<path d="m6 9 6 6 6-6"/>',
+    hourglass: '<path d="M6.5 7h11M6.5 17h11"/><path d="M6 20v-2a6 6 0 1 1 12 0v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1z"/><path d="M6 4v2a6 6 0 1 0 12 0V4a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z"/>',
   };
 
   // ---------------------------------------------------------------- HTML-шаблоны с экранированием
@@ -129,7 +143,9 @@
 
   // ---------------------------------------------------------------- Форматирование
   const nf = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
+  const nf1 = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 });
   const num = (n) => nf.format(Math.round(n || 0));
+  const dec = (n) => (n > 0 && n < 0.05 ? '<0,1' : nf1.format(n || 0));
   const money = (n) => num(n) + ' сум';
   const pcs = (n) => num(n) + ' шт';
   const signed = (n) => (n > 0 ? '+' : n < 0 ? '−' : '') + num(Math.abs(n));
@@ -235,16 +251,30 @@
     lsSet(TOKEN_KEY, TOKEN);
   }
 
-  async function api(method, path, body) {
+  // Связь с сервером: offline — последний запрос не дошёл (нет сети, таймаут, сервер недоступен).
+  const NET = { offline: false, fromSnapshot: false };
+  const isOfflineErr = (e) => !!e && (e.status === 0 || e.status === 502 || e.status === 503 || e.status === 504);
+
+  async function api(method, path, body, opts) {
     const headers = { Accept: 'application/json' };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (TOKEN) headers.Authorization = 'Bearer ' + TOKEN;
+    const ctl = window.AbortController ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), (opts && opts.timeout) || 20000) : 0;
     let res;
     try {
-      res = await fetch(API + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+      res = await fetch(API + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: ctl ? ctl.signal : undefined });
     } catch (e) {
+      setNet(true);
       throw new ApiError('Нет связи с сервером — проверьте интернет и попробуйте ещё раз', 0);
+    } finally {
+      clearTimeout(timer);
     }
+    if (res.status === 502 || res.status === 503 || res.status === 504) {
+      setNet(true);
+      throw new ApiError('Сервер временно недоступен — попробуйте чуть позже', res.status);
+    }
+    setNet(false);
     let data = null;
     try { data = await res.json(); } catch (e) { data = null; }
     if (res.status === 401 && TOKEN && path !== '/login') {
@@ -269,27 +299,208 @@
     }));
   const freshCart = (payment) => ({ items: [], customer: '', payment: payment || 'cash', received: '', uuid: newUuid() });
   const freshDrafts = () => ({ cart: freshCart(), incomeDraft: { supplier: '', lines: [] }, auditDraft: { counts: {} } });
-  let L = (() => {
-    try {
-      const d = JSON.parse(lsGet(LOCAL_KEY) || 'null');
-      if (d && d.cart && d.incomeDraft && d.auditDraft) return d;
-    } catch (e) { /* испорченный черновик — начинаем заново */ }
+  // У каждого магазина свои черновики: корзина магазина А не попадает в магазин Б.
+  const draftKey = (storeId) => LOCAL_KEY + ':' + storeId;
+  function loadDrafts(storeId) {
+    for (const k of [draftKey(storeId), LOCAL_KEY]) {
+      try {
+        const d = JSON.parse(lsGet(k) || 'null');
+        if (d && d.cart && d.incomeDraft && d.auditDraft) {
+          if (k === LOCAL_KEY) { lsSet(LOCAL_KEY, null); lsSet(draftKey(storeId), JSON.stringify(d)); } // черновик до появления магазинов
+          return d;
+        }
+      } catch (e) { /* испорченный черновик — начинаем заново */ }
+    }
     return freshDrafts();
-  })();
-  const saveLocal = () => lsSet(LOCAL_KEY, JSON.stringify(L));
+  }
+  let L = freshDrafts();
+  const saveLocal = () => { if (D.store && D.store.id) lsSet(draftKey(D.store.id), JSON.stringify(L)); };
 
   // ---------------------------------------------------------------- Данные с сервера
-  const D = { me: null, store: { name: 'Касса и склад', is_demo: false }, features: { demo: false }, employees: [], products: [], popular: [], suppliers: [], catalogAt: 0 };
+  const D = { me: null, store: { id: null, name: 'Касса и склад', is_demo: false }, stores: [], features: { demo: false }, employees: [], products: [], popular: [], suppliers: [], catalogAt: 0 };
   let byId = new Map();
-  function setProducts(list) {
-    D.products = list.slice().sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+  // SERVER_PRODUCTS — остатки, как их прислал сервер; D.products — они же за вычетом чеков из очереди на этом устройстве.
+  let SERVER_PRODUCTS = [];
+  function applyStock() {
+    const pend = pendingQty();
+    D.products = SERVER_PRODUCTS.map((p) => {
+      if (!pend[p.id]) return p;
+      const stock = Math.max(0, p.stock - pend[p.id]);
+      return Object.assign({}, p, { stock, is_low: stock <= p.min_stock });
+    }).sort((a, b) => a.name.localeCompare(b.name, 'ru'));
     byId = new Map(D.products.map((p) => [p.id, p]));
+  }
+  function setProducts(list) {
+    SERVER_PRODUCTS = list.slice();
+    applyStock();
+    saveSnapshot();
   }
   function patchProducts(list) {
     if (!list || !list.length) return;
-    const map = new Map(D.products.map((p) => [p.id, p]));
+    const map = new Map(SERVER_PRODUCTS.map((p) => [p.id, p]));
     list.forEach((p) => map.set(p.id, p));
     setProducts([...map.values()]);
+  }
+
+  // ---------------------------------------------------------------- Без связи: копия данных и очередь чеков
+  const tokenTag = () => (TOKEN ? TOKEN.slice(-12) : '');
+  function saveSnapshot() {
+    if (!D.me || !TOKEN) return;
+    lsSet(SNAP_KEY, JSON.stringify({
+      tag: tokenTag(), at: Date.now(), employee: D.me, store: D.store, stores: D.stores, employees: D.employees,
+      products: SERVER_PRODUCTS, popular: D.popular, suppliers: D.suppliers, features: D.features,
+    }));
+  }
+  function loadSnapshot() {
+    try {
+      const s = JSON.parse(lsGet(SNAP_KEY) || 'null');
+      return s && s.tag && s.tag === tokenTag() && s.store && Array.isArray(s.products) ? s : null;
+    } catch (e) { return null; }
+  }
+  const deviceStore = () => { const v = Number(lsGet(STORE_KEY)); return v > 0 ? v : null; };
+
+  // Приложения-обёртки (mobile/android, mobile/ios) дают мост: открыть настройки приложения
+  // и держать копию очереди в памяти телефона — WebView пишет localStorage на диск не сразу.
+  const NATIVE = (() => {
+    try {
+      const a = window.KassaAndroid;
+      if (a) return { platform: 'android', openSettings: () => a.openAppSettings(), saveQueue: (j) => a.saveQueue(j), loadQueue: () => a.loadQueue() };
+      const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.kassa;
+      if (h) {
+        return {
+          platform: 'ios',
+          openSettings: () => h.postMessage({ action: 'openSettings' }),
+          saveQueue: (j) => h.postMessage({ action: 'saveQueue', queue: j }),
+          loadQueue: () => window.__kassaQueueBackup || '[]',
+        };
+      }
+    } catch (e) { /* обычный браузер */ }
+    return null;
+  })();
+
+  // Очередь: чек пробит, но сервер не ответил. Уходит на сервер под тем же сотрудником, в том же магазине.
+  let restoredFromNative = 0;
+  let Q = (() => {
+    let q = [];
+    try { q = JSON.parse(lsGet(QUEUE_KEY) || '[]'); } catch (e) { q = []; }
+    if (!Array.isArray(q)) q = [];
+    // Копия из обёртки дополняет очередь чеками, которые не успели попасть в localStorage.
+    // Уже отправленный чек из устаревшей копии безопасен: сервер вернёт его как повтор (client_uuid).
+    if (NATIVE) {
+      try {
+        const have = new Set(q.map((e) => e.client_uuid));
+        const backup = JSON.parse(NATIVE.loadQueue() || '[]');
+        if (Array.isArray(backup)) {
+          backup.forEach((e) => {
+            if (e && e.client_uuid && Array.isArray(e.items) && !have.has(e.client_uuid)) { q.push(e); restoredFromNative++; }
+          });
+        }
+      } catch (e) { /* копии нет */ }
+    }
+    return q;
+  })();
+  const saveQueue = () => {
+    const json = Q.length ? JSON.stringify(Q) : null;
+    lsSet(QUEUE_KEY, json);
+    if (NATIVE) {
+      try { NATIVE.saveQueue(json || '[]'); } catch (e) { /* без копии в обёртке */ }
+    }
+  };
+  if (restoredFromNative) saveQueue();
+  const SYNC = { busy: false, pauseUntil: 0 };
+  const myQueue = () => (D.me ? Q.filter((e) => e.employee_id === D.me.id) : []);
+  function pendingQty() {
+    const out = {};
+    if (!D.store || !D.store.id) return out;
+    for (const e of Q) {
+      if (e.store_id !== D.store.id) continue;
+      for (const it of e.items) out[it.product_id] = (out[it.product_id] || 0) + it.qty;
+    }
+    return out;
+  }
+  const queueUnits = (e) => sum(e.items, (i) => i.qty);
+  const wire = (e) => ({
+    client_uuid: e.client_uuid, store_id: e.store_id, sold_at: e.sold_at, payment: e.payment, customer: e.customer,
+    received: e.received, client_total: e.client_total, items: e.items,
+  });
+
+  /** Отправляет на сервер чеки этого сотрудника из очереди. Сервер принимает каждый чек один раз. */
+  async function syncQueue(manual) {
+    if (SYNC.busy || !D.me || !TOKEN) return;
+    if (!manual && Date.now() < SYNC.pauseUntil) return;
+    const todo = myQueue().filter((e) => e.status !== 'failed');
+    if (!todo.length) return;
+    SYNC.busy = true;
+    renderNet();
+    let sent = 0, conflicts = 0, rejected = 0;
+    try {
+      for (let i = 0; i < todo.length; i += 20) {
+        const res = await api('POST', '/sales/sync', { sales: todo.slice(i, i + 20).map(wire) }, { timeout: 30000 });
+        for (const r of res.results) {
+          const e = Q.find((x) => x.client_uuid === r.client_uuid);
+          if (!e) continue;
+          if (r.status === 'rejected') {
+            e.status = 'failed';
+            e.error = r.message || 'Сервер не принял чек';
+            rejected++;
+            continue;
+          }
+          Q = Q.filter((x) => x !== e);
+          sent++;
+          if (r.sale && r.sale.conflict) conflicts++;
+        }
+        saveQueue();
+        patchProducts(res.products);
+      }
+    } catch (e) {
+      if (!isOfflineErr(e) && e.status !== 401) {
+        SYNC.pauseUntil = Date.now() + 60000;
+        toast('Чеки с устройства пока не отправлены: ' + e.message, 'bad');
+      }
+    } finally {
+      SYNC.busy = false;
+      applyStock();
+      renderNet();
+    }
+    if (sent) {
+      invalidate();
+      refreshCatalog(true);
+      render();
+      toast(`Отправлено на сервер: ${sent} ${plural(sent, ['чек', 'чека', 'чеков'])}` + (conflicts ? ` · с расхождением по остаткам: ${conflicts} — проверьте в журнале` : ''), conflicts ? 'bad' : 'ok');
+    }
+    if (rejected) toast(`Сервер не принял ${rejected} ${plural(rejected, ['чек', 'чека', 'чеков'])} — откройте очередь вверху экрана`, 'bad');
+  }
+
+  /** Проверка связи: есть что отправить — отправляем, иначе спрашиваем сервер, если считаем, что его нет. */
+  function heartbeat() {
+    if (!D.me || !TOKEN) return;
+    if (myQueue().some((e) => e.status !== 'failed')) syncQueue();
+    else if (NET.offline) api('GET', '/ping', undefined, { timeout: 8000 }).catch(() => { /* ещё нет связи */ });
+  }
+
+  function setNet(off) {
+    if (NET.offline === off) return;
+    NET.offline = off;
+    renderNet();
+    if (!off && D.me) {
+      // связь вернулась: отправляем очередь и обновляем данные
+      invalidate();
+      refreshCatalog(true);
+      setTimeout(() => syncQueue(), 0);
+      if (NET.fromSnapshot) refreshSession();
+      render();
+    }
+  }
+
+  /** Касса запускалась по сохранённой копии — после появления связи тихо берём свежие данные входа. */
+  function refreshSession() {
+    api('GET', '/bootstrap')
+      .then((b) => {
+        NET.fromSnapshot = false;
+        applyBootstrap(b);
+        render();
+      })
+      .catch(() => { /* попробуем при следующем восстановлении связи */ });
   }
   const P = (id) => byId.get(Number(id));
   const byCode = (code) => D.products.find((p) => p.barcode === code);
@@ -304,11 +515,14 @@
   function applyBootstrap(b) {
     D.me = b.employee;
     D.store = b.store;
+    D.stores = b.stores || [b.store];
     D.employees = b.employees;
     D.popular = b.popular;
     D.suppliers = b.suppliers;
     D.features = b.features || { demo: false };
     D.catalogAt = Date.now();
+    L = loadDrafts(D.store.id);
+    lsSet(STORE_KEY, String(D.store.id));
     setProducts(b.products);
     // в черновиках оставляем только товары, которые ещё есть в каталоге
     L.cart.items = L.cart.items.filter((l) => P(l.pid));
@@ -337,7 +551,7 @@
           c.error = null;
           if (first) U.enter = true;
         })
-        .catch((e) => { c.error = e; if (e.status !== 401 && !first) toast(e.message, 'bad'); })
+        .catch((e) => { c.error = e; if (e.status !== 401 && !first && !isOfflineErr(e)) toast(e.message, 'bad'); })
         .finally(() => { c.promise = null; if (D.me && changed) render(); });
     }
     return c.data;
@@ -351,7 +565,7 @@
     if (!D.me || catalogLoading || (!force && Date.now() - D.catalogAt < 20000)) return;
     catalogLoading = api('GET', '/products')
       .then((d) => {
-        const changed = JSON.stringify(d.products) !== JSON.stringify(D.products) || JSON.stringify(d.popular) !== JSON.stringify(D.popular);
+        const changed = JSON.stringify(d.products) !== JSON.stringify(SERVER_PRODUCTS) || JSON.stringify(d.popular) !== JSON.stringify(D.popular);
         D.catalogAt = Date.now();
         if (!changed) return;
         setProducts(d.products);
@@ -406,12 +620,13 @@
     render();
   }
 
-  function addIncomeLine(pid) {
+  /** Строка прихода: +1 шт или, если задано qty (рекомендация прогноза), ровно столько. */
+  function addIncomeLine(pid, qty) {
     const p = P(pid);
     if (!p) return null;
     const line = L.incomeDraft.lines.find((l) => l.pid === p.id);
-    if (line) line.qty++;
-    else L.incomeDraft.lines.unshift({ pid: p.id, qty: 1, cost: p.buy_price });
+    if (line) line.qty = qty > 0 ? Math.max(line.qty, qty) : line.qty + 1;
+    else L.incomeDraft.lines.unshift({ pid: p.id, qty: qty > 0 ? qty : 1, cost: p.buy_price });
     saveLocal();
     return p;
   }
@@ -456,14 +671,23 @@
     }
     const received = parseMoney(c.received);
     if (c.payment === 'cash' && received && received < cartTotal()) { toast('Получено меньше суммы чека', 'bad'); return; }
+    // Связи нет — чек сразу сохраняется на устройстве и уйдёт на сервер позже.
+    if (NET.offline) { queueSale(c, lines); return; }
     return run(el, async () => {
-      const res = await api('POST', '/sales', {
-        client_uuid: c.uuid,
-        items: lines.map((l) => ({ product_id: l.pid, qty: l.qty })),
-        payment: c.payment,
-        customer: c.customer.trim() || null,
-        received: c.payment === 'cash' && received ? received : null,
-      });
+      let res;
+      try {
+        res = await api('POST', '/sales', {
+          client_uuid: c.uuid,
+          items: lines.map((l) => ({ product_id: l.pid, qty: l.qty })),
+          payment: c.payment,
+          customer: c.customer.trim() || null,
+          received: c.payment === 'cash' && received ? received : null,
+        }, { timeout: 12000 });
+      } catch (e) {
+        // сервер не ответил: чек мог и сохраниться — тот же client_uuid не даст дубля при отправке из очереди
+        if (isOfflineErr(e)) { queueSale(c, lines); return; }
+        throw e;
+      }
       patchProducts(res.products);
       L.cart = freshCart(c.payment);
       saveLocal();
@@ -478,6 +702,38 @@
         burst(b.left + b.width / 2, b.top + b.height / 2);
       }, 520);
     });
+  }
+
+  /** Чек без связи: в очередь на устройстве; остатки на телефоне сразу уменьшаются на проданное. */
+  function queueSale(c, lines) {
+    const total = cartTotal();
+    const received = parseMoney(c.received);
+    const entry = {
+      client_uuid: c.uuid,
+      store_id: D.store.id,
+      store_name: D.store.name,
+      employee_id: D.me.id,
+      employee_name: D.me.name,
+      sold_at: new Date().toISOString(),
+      payment: c.payment,
+      customer: c.customer.trim() || null,
+      received: c.payment === 'cash' ? received || total : null,
+      client_total: total,
+      items: lines.map((l) => { const p = P(l.pid); return { product_id: p.id, qty: l.qty, name: p.name, price: p.sell_price }; }),
+      status: 'pending',
+      error: null,
+    };
+    if (!Q.some((e) => e.client_uuid === entry.client_uuid)) Q.push(entry);
+    saveQueue();
+    applyStock();
+    L.cart = freshCart(c.payment);
+    saveLocal();
+    invalidate();
+    render();
+    renderNet();
+    openQueuedReceipt(entry);
+    chime();
+    setTimeout(heartbeat, 4000);
   }
 
   function postIncome(el) {
@@ -540,7 +796,7 @@
     if (!p) return;
     return run(null, async () => {
       await api('DELETE', '/products/' + p.id);
-      setProducts(D.products.filter((x) => x.id !== p.id));
+      setProducts(SERVER_PRODUCTS.filter((x) => x.id !== p.id));
       L.cart.items = L.cart.items.filter((l) => l.pid !== p.id);
       L.incomeDraft.lines = L.incomeDraft.lines.filter((l) => l.pid !== p.id);
       delete L.auditDraft.counts[p.id];
@@ -661,8 +917,10 @@
     }
   }
 
+  const camDenied = (e) => !!e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
   function camError(e) {
     const n = e && e.name;
+    if (camDenied(e) && NATIVE) return 'Нет доступа к камере. Разрешите камеру для приложения «Касса и склад» в настройках телефона или введите цифры вручную.';
     if (n === 'NotAllowedError' || n === 'SecurityError') return 'Нет доступа к камере. Разрешите его в настройках браузера, сфотографируйте штрих-код или введите цифры вручную.';
     if (n === 'NotFoundError' || n === 'OverconstrainedError' || n === 'NoCamera') return 'Камера не найдена. Сфотографируйте штрих-код или введите цифры вручную.';
     return 'Камера здесь недоступна. Сфотографируйте штрих-код или введите цифры вручную.';
@@ -858,7 +1116,7 @@
       try {
         await this.start();
       } catch (e) {
-        if (this.live) this.status(camError(e));
+        if (this.live) this.status(camError(e), camDenied(e));
       }
     },
     async start() {
@@ -876,7 +1134,7 @@
         this.reader = new dec.Z.BrowserMultiFormatReader(dec.hints, 250);
         this.status('Наведите камеру на штрих-код');
         this.reader.decodeFromConstraints(constraints, video, (res) => { if (res) this.hit(res.getText()); })
-          .catch((e) => { if (this.live) this.status(camError(e)); });
+          .catch((e) => { if (this.live) this.status(camError(e), camDenied(e)); });
         return;
       }
       this.stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -915,9 +1173,9 @@
       const r = o.onCode(code) || {};
       setHTML($('#scan-last'), html`<span class="${r.ok ? 'scan-ok' : 'scan-bad'}">${r.msg || code}</span>`);
     },
-    status(t) {
+    status(t, settings) {
       const el = $('#scan-status');
-      el.textContent = t || '';
+      setHTML(el, t ? html`<span>${t}</span>${settings && NATIVE ? html`<button class="btn btn-sm" data-act="nativeSettings">Открыть настройки</button>` : ''}` : '');
       el.hidden = !t;
     },
     stopStream() {
@@ -949,6 +1207,7 @@
     incQ: '', refSale: null, refQty: {}, refReason: 'Не подошёл',
     audQ: '', audCat: 'all', audDiff: false,
     period: 'today', jType: 'all', jQ: '', jQText: '', jLimit: 80, jLast: null,
+    fcThr: 7, fcDead: 30, stPeriod: 'today', saleCat: 'all',
     scanCode: '', backTo: 'home', flash: null, flashNew: false, focus: null, enter: false, pop: null, busy: false,
     seenSale: undefined,
     auth: null,
@@ -972,12 +1231,16 @@
   const docLabel = (type, number) => ({ sale: 'Продажа №' + number, ret: 'Возврат В-' + pad4(number), inc: 'Приход П-' + pad4(number), aud: 'Инвентаризация И-' + pad4(number) })[type];
   const DOC_ACT = { sale: 'openSale', ret: 'openReturn', inc: 'openIncome', aud: 'openAudit' };
 
+  /** Пометка чека, пробитого без связи; «расхождение» — не хватило товара или не совпала сумма. */
+  const offlinePill = (s) => (s.conflict
+    ? html`<span class="pill warn">${ic('alert')}расхождение</span>`
+    : s.offline ? html`<span class="pill accent">${ic('offline')}без связи</span>` : '');
   function saleRow(s, act, isNew) {
     return html`<button class="row${isNew ? ' is-new' : ''}" data-act="${act || 'openSale'}" data-id="${s.id}">
       <span class="row-ico sale">${ic(PAY[s.payment].icon)}</span>
       <span class="row-main">
         <span class="row-title">Чек №${s.number}${s.customer ? html` <span class="faint">· ${s.customer}</span>` : ''}</span>
-        <span class="row-sub"><span>${whenShort(s.created_at)}</span><span>${shortName(s.employee)}</span><span>${PAY[s.payment].name}</span>${s.has_refund ? html`<span class="pill bad">возврат</span>` : ''}</span>
+        <span class="row-sub"><span>${whenShort(s.created_at)}</span><span>${shortName(s.employee)}</span><span>${PAY[s.payment].name}</span>${s.has_refund ? html`<span class="pill bad">возврат</span>` : ''}${offlinePill(s)}</span>
       </span>
       <span class="row-side"><span class="amt">${money(s.total)}</span><span class="faint">${pcs(s.units)}</span></span>
     </button>`;
@@ -1047,12 +1310,147 @@
         <span class="alert-body"><span class="alert-title">Заканчиваются ${low.length} ${plural(low.length, ['товар', 'товара', 'товаров'])}</span>
         <span class="alert-text">${low.slice(0, 3).map((p) => `${p.name} — ${p.stock} шт`).join(' · ')}${low.length > 3 ? ' …' : ''}</span></span>${ic('right')}</button>` : ''}
       ${quick}
+      ${forecastWidget(d.forecast)}
       <section class="card flush">
         <div class="card-h"><h2 class="sec-title">Последние продажи</h2><button class="link" data-act="nav" data-to="journal">Журнал ${ic('right', 'i-sm')}</button></div>
         <div class="rows">${recent.length ? recent.map((s) => saleRow(s, null, seen != null && s.number > seen)) : empty('receipt', 'Продаж пока нет')}</div>
       </section>`;
     },
   };
+
+  // Прогнозы (считает сервер по истории продаж)
+  const daysText = (r) => (r.stock <= 0 ? 'нет в наличии' : r.days_left < 1 ? 'меньше чем на день' : `хватит на ${r.days_left} ${plural(r.days_left, ['день', 'дня', 'дней'])}`);
+  const trendText = (t) => (t == null ? '' : t > 0 ? `рост ${t}%/нед` : t < 0 ? `спад ${-t}%/нед` : 'без тренда');
+  function forecastWidget(f) {
+    if (!f) return '';
+    const n = f.running_out_count;
+    return html`<section class="card flush fc-widget">
+      <div class="card-h"><h2 class="sec-title">Прогноз</h2><button class="link" data-act="nav" data-to="forecast">Подробнее ${ic('right', 'i-sm')}</button></div>
+      <div class="fc-grid">
+        <button class="fc-cell ${n ? 'warn' : 'good'}" data-act="nav" data-to="forecast"><b>${cnt(n, 'fc-run')}</b><span>${n ? `${plural(n, ['товар закончится', 'товара закончатся', 'товаров закончатся'])} в ближайшие ${f.threshold} дней` : `всех товаров хватит на ${f.threshold}+ дней`}</span></button>
+        <button class="fc-cell ${f.dead_count ? 'bad' : 'good'}" data-act="nav" data-to="forecast"><b>${f.dead_count ? cnt(f.dead_frozen, 'fc-dead', 'compact') : '0'}</b><span>${f.dead_count ? `сум в ${f.dead_count} ${plural(f.dead_count, ['товаре', 'товарах', 'товарах'])} без продаж ${f.dead_days}+ дней` : `товаров без продаж ${f.dead_days}+ дней нет`}</span></button>
+      </div>
+      ${f.running_out.length ? html`<div class="rows">${f.running_out.map((r) => html`<button class="row" data-act="openProduct" data-id="${r.product_id}"><span class="row-main"><span class="row-title">${r.name}</span><span class="row-sub"><span>остаток ${pcs(r.stock)}</span><span>≈${dec(r.per_day)} шт/день</span></span></span><span class="row-side"><span class="pill ${r.stock <= 0 || r.days_left < 2 ? 'bad' : 'warn'}">${daysText(r)}</span><span class="faint">заказать ${pcs(r.order_qty)}</span></span></button>`)}</div>` : ''}
+    </section>`;
+  }
+  function segOf(name, options, value) {
+    const i = Math.max(0, options.findIndex(([v]) => v === value));
+    return html`<div class="seg" role="tablist" data-seg="${name}" data-i="${i}" style="--n:${options.length};--i:${i}"><span class="seg-pill" aria-hidden="true"></span>${options.map(([v, l]) => html`<button role="tab" aria-selected="${String(v === value)}" class="${v === value ? 'on' : ''}" data-act="${name}" data-v="${v}">${l}</button>`)}</div>`;
+  }
+  function fcRow(r) {
+    return html`<div class="row">
+      <button class="row-main as-link" data-act="openProduct" data-id="${r.product_id}">
+        <span class="row-title">${r.name}</span>
+        <span class="row-sub"><span>остаток ${pcs(r.stock)}</span><span>≈${dec(r.per_day)} шт/день</span>${r.trend_pct != null ? html`<span>${trendText(r.trend_pct)}</span>` : ''}</span>
+        <span class="row-sub"><span class="pill ${r.stock <= 0 || r.days_left < 2 ? 'bad' : 'warn'}">${daysText(r)}</span><span>заказать <b>${pcs(r.order_qty)}</b> · ${money(r.order_sum)}</span></span>
+      </button>
+      <button class="btn btn-sm" data-act="fcIncome" data-id="${r.product_id}" data-qty="${r.order_qty}">${ic('income', 'i-sm')}В приход</button>
+    </div>`;
+  }
+  const deadRow = (r) => html`<button class="row" data-act="openProduct" data-id="${r.product_id}">
+      <span class="row-ico">${ic('hourglass')}</span>
+      <span class="row-main"><span class="row-title">${r.name}</span>
+        <span class="row-sub"><span>остаток ${pcs(r.stock)}</span><span>${r.last_sale_at ? 'последняя продажа ' + fmtDate(r.last_sale_at) : 'ни разу не продавался'}</span></span></span>
+      <span class="row-side"><span class="amt">${money(r.frozen)}</span><span class="faint">${r.idle_days} дн. без продаж</span></span>
+    </button>`;
+  SCREENS.forecast = {
+    title: 'Прогнозы', keys: ['forecast:'],
+    view() {
+      const key = `forecast:${U.fcThr}:${U.fcDead}`;
+      const f = get(key, `/forecasts?threshold=${U.fcThr}&dead_days=${U.fcDead}`);
+      if (!f) return html`<section class="card">${loadBox(key, 5)}</section>`;
+      const t = f.totals;
+      return html`
+      <section class="card flush">
+        <div class="card-h"><div><h2 class="sec-title">Скоро закончатся</h2><div class="sec-sub">остатка хватит меньше чем на</div></div><span class="pill ${f.running_out.length ? 'warn' : 'good'}">${f.running_out.length}</span></div>
+        <div class="pad">${segOf('fcThr', FC_THRESHOLDS, U.fcThr)}</div>
+        <div class="rows">${f.running_out.length ? f.running_out.map(fcRow) : empty('check', `Всех товаров с продажами хватит минимум на ${f.threshold} дней`)}</div>
+        ${f.running_out.length ? html`<div class="row"><span class="row-main"><span class="row-title">Рекомендуемая закупка</span><span class="row-sub">${pcs(t.order_units)} · запас на ${f.horizon_days} дней + минимальный остаток</span></span><span class="amt">${money(t.order_sum)}</span></div>
+        <div class="row"><button class="btn btn-primary btn-block" data-act="fcAllIncome">${ic('income')}Всё в приход</button></div>` : ''}
+      </section>
+      <section class="card flush">
+        <div class="card-h"><div><h2 class="sec-title">Без продаж</h2><div class="sec-sub">товар на складе, а продаж нет</div></div><span class="pill ${f.dead.length ? 'bad' : 'good'}">${f.dead.length}</span></div>
+        <div class="pad">${segOf('fcDead', FC_DEAD, U.fcDead)}</div>
+        <div class="rows">${f.dead.length ? f.dead.map(deadRow) : empty('check', `Все товары на складе продавались за последние ${f.dead_days} дней`)}</div>
+        ${f.dead.length ? html`<div class="row"><span class="row-main"><span class="row-title">Заморожено в закупке</span><span class="row-sub">${f.dead.length} ${plural(f.dead.length, ['позиция', 'позиции', 'позиций'])} · ${pcs(t.dead_units)}</span></span><span class="amt minus">${money(t.dead_frozen)}</span></div>` : ''}
+      </section>
+      <section class="card"><h2 class="sec-title">Как считается прогноз</h2>
+        <p class="sec-sub">Сервер берёт продажи каждого товара по дням за последние ${f.history_days} полных дней. Спрос в день — скользящее среднее за ${f.history_days} дней с поправкой на тренд: наклон линии продаж, продлённый на ${f.horizon_days} дней вперёд (поправка не больше ±50%). «Хватит на» = остаток ÷ спрос в день. «Заказать» = спрос на ${f.horizon_days} дней + минимальный остаток − текущий остаток. Новые товары считаются со дня создания.</p>
+      </section>`;
+    },
+  };
+
+  // Магазины (владелец): сводка и переключение
+  function storeCard(s) {
+    const x = s.summary;
+    return html`<section class="card">
+      <div class="card-h"><div><h2 class="sec-title">${s.name}</h2>${s.address ? html`<div class="sec-sub">${s.address}</div>` : ''}</div>${s.current ? html`<span class="pill good">${ic('check')}вы здесь</span>` : html`<button class="btn btn-sm" data-act="switchStore" data-id="${s.id}">${ic('swap', 'i-sm')}Перейти</button>`}</div>
+      <div class="stat-table">
+        <span>Выручка</span><b>${money(x.revenue)}</b>
+        <span>Чеков · средний чек</span><b>${x.checks} · ${money(x.avg)}</b>
+        <span>Валовая прибыль</span><b>${money(x.profit)}${x.margin_pct != null ? html` <span class="faint">· ${x.margin_pct}%</span>` : ''}</b>
+        <span>Склад по закупке</span><b>${money(s.warehouse.cost)}</b>
+        <span>Скоро закончатся · мало на складе</span><b class="${s.running_out ? 'warn' : ''}">${s.running_out} · ${s.low_stock}</b>
+        <span>Без продаж 30+ дней</span><b class="${s.dead_frozen ? 'bad' : ''}">${money(s.dead_frozen)}</b>
+      </div>
+    </section>`;
+  }
+  SCREENS.stores = {
+    title: 'Магазины', keys: ['stores:'],
+    view() {
+      if (!isOwner()) return empty('store', 'Сводка по магазинам доступна владельцу');
+      const seg = segOf('stPeriod', Object.entries(STORE_PERIODS), U.stPeriod);
+      const key = 'stores:' + U.stPeriod;
+      const d = get(key, '/stores?period=' + U.stPeriod);
+      if (!d) return html`${seg}<section class="card">${loadBox(key, 4)}</section>`;
+      const t = d.total;
+      const range = d.period === 'today' ? fmtDate(dayDate(d.to), true) : `${fmtDate(dayDate(d.from))} — ${fmtDate(dayDate(d.to), true)}`;
+      return html`
+      ${seg}
+      <p class="summary-line">${range} · ${t.stores} ${plural(t.stores, ['магазин', 'магазина', 'магазинов'])}</p>
+      <div class="kpis">
+        <div class="kpi main"><span>Выручка всех магазинов</span><b>${sumVal(t.revenue, 'st-rev')}</b><small>${t.checks} ${plural(t.checks, ['чек', 'чека', 'чеков'])}${t.checks ? ' · средний чек ' + money(t.avg) : ''}${t.refunds ? ' · возвраты −' + money(t.refunds) : ''}</small></div>
+        <div class="kpi"><span>Валовая прибыль</span><b>${sumVal(t.profit, 'st-profit')}</b><small>${t.margin_pct != null ? 'маржа ' + t.margin_pct + '%' : ''}</small></div>
+        <div class="kpi"><span>Склад по закупке</span><b>${sumVal(t.warehouse_cost, 'st-wh')}</b><small>${pcs(t.warehouse_units)}</small></div>
+        <div class="kpi"><span>Скоро закончатся</span><b>${cnt(t.running_out, 'st-run')}</b><small>мало на складе: ${t.low_stock}</small></div>
+        <div class="kpi"><span>Без продаж 30+ дней</span><b>${compact(t.dead_frozen)}</b><small>сум заморожено</small></div>
+      </div>
+      ${d.stores.length > 1 ? html`<section class="card"><h2 class="sec-title">Выручка по магазинам</h2>${hbars(d.stores.map((x) => ({ key: x.id, name: x.name, v: x.summary.revenue, sub: `${x.summary.checks} ${plural(x.summary.checks, ['чек', 'чека', 'чеков'])}` })), 'st')}</section>` : ''}
+      ${d.stores.map(storeCard)}
+      <button class="btn btn-primary btn-lg" data-act="newStore">${ic('plus')}Добавить магазин</button>`;
+    },
+  };
+  function openStorePicker() {
+    openSheet(html`${sheetHead('Магазины', 'Где работать на этом устройстве')}
+      <div class="sheet-body">
+        <section class="card flush"><div class="rows">${D.stores.map((x) => html`<button class="row" data-act="switchStore" data-id="${x.id}">
+          <span class="row-ico">${ic('store')}</span>
+          <span class="row-main"><span class="row-title">${x.name}</span>${x.address ? html`<span class="row-sub">${x.address}</span>` : ''}</span>
+          ${x.id === D.store.id ? html`<span class="pill good">${ic('check')}сейчас</span>` : ic('right')}</button>`)}</div></section>
+        <p class="hint">У каждого магазина свои товары, продавцы, чеки и отчёты. Владелец работает во всех.</p>
+        <div class="btn-row"><button class="btn" data-act="nav" data-to="stores">${ic('chart')}Сводка по всем</button><button class="btn btn-primary" data-act="newStore">${ic('plus')}Новый магазин</button></div>
+      </div>`);
+  }
+  function storeForm() {
+    openSheet(html`${sheetHead('Новый магазин', 'Свои товары, продавцы, чеки и отчёты')}
+      <form class="sheet-body" data-submit="createStore" novalidate>
+        <div class="field"><label for="ns-name">Название</label><input class="input" id="ns-name" name="name" maxlength="60" autocomplete="off" placeholder="Например, Mobi Aksessuar Chilonzor"></div>
+        <div class="field"><label for="ns-addr">Адрес</label><input class="input" id="ns-addr" name="address" maxlength="120" autocomplete="off" placeholder="Печатается в чеке"></div>
+        <p class="hint">Каталог нового магазина пуст, нумерация чеков начнётся с 1001. Продавцов добавьте уже в нём, в разделе «Сотрудники».</p>
+        <p class="err" id="ns-err" role="alert"></p>
+        <button class="btn btn-primary btn-lg" type="submit">Создать и перейти</button>
+      </form>`);
+  }
+  function switchStore(id, el) {
+    if (D.store.id === Number(id)) { closeSheet(); return; }
+    return run(el || null, async () => {
+      if (myQueue().length) await syncQueue(true); // чеки этого магазина уходят до переключения
+      await api('POST', `/stores/${id}/switch`);
+      await startSession();
+      go('home');
+      toast(`Магазин: ${D.store.name}`, 'ok');
+    });
+  }
 
   // Продажа (касса)
   function cartLine(l) {
@@ -1073,27 +1471,58 @@
     if (r < t) return html`<span class="bad">не хватает ${num(t - r)}</span>`;
     return money(r - t);
   }
+  // Планшет (ширина от 768px): касса в две колонки — каталог слева, корзина справа.
+  const WIDE = window.matchMedia ? window.matchMedia('(min-width: 768px)') : { matches: false };
+  const isWide = () => !!WIDE.matches;
+  const saleTile = (p) => html`<button class="tile" data-act="addCart" data-id="${p.id}"${raw(p.stock <= 0 ? ' aria-disabled="true"' : '')}><span class="tile-name">${p.name}</span><span class="tile-foot"><span class="tile-price">${num(p.sell_price)}</span><span class="tile-stock">${p.stock > 0 ? p.stock + ' шт' : 'нет'}</span></span></button>`;
+  /** Весь каталог плитками (планшет): поиск и категория фильтруют, без фильтра — сначала популярные. */
+  function saleGrid() {
+    const q = U.saleQ.trim();
+    let list = q ? searchProducts(q) : D.products.slice();
+    if (U.saleCat !== 'all') list = list.filter((p) => p.category === U.saleCat);
+    if (!q) {
+      const rank = new Map(D.popular.map((id, i) => [id, i]));
+      const r = (p) => (rank.has(p.id) ? rank.get(p.id) : 1e6) + (p.stock > 0 ? 0 : 2e6);
+      list.sort((a, b) => r(a) - r(b) || a.name.localeCompare(b.name, 'ru'));
+    }
+    if (!list.length) return empty(D.products.length ? 'search' : 'box', D.products.length ? 'Ничего не найдено — измените поиск или категорию' : 'Добавьте товары в каталог');
+    return html`<div class="tiles grid">${list.map(saleTile)}</div>`;
+  }
+  const checkoutBox = (key) => html`<div class="checkout-sum"><span>Итого</span><b>${cnt(cartTotal(), key)}&nbsp;сум</b></div><button class="btn btn-primary btn-lg${U.busy ? ' busy' : ''}" data-act="checkout"${raw(U.busy ? ' disabled' : '')}>${ic(NET.offline ? 'offline' : 'receipt')}${NET.offline ? 'Пробить без связи' : 'Пробить чек'}</button>`;
   SCREENS.sale = {
     title: 'Продажа', tab: true, catalog: true,
     view() {
       const c = L.cart;
       const lines = cartLines();
       const total = cartTotal();
-      const pop = D.popular.map(P).filter((p) => p && p.stock > 0).slice(0, 12);
+      const wide = isWide();
       const payIdx = Object.keys(PAY).indexOf(c.payment);
-      return html`
-      <div class="search-row">
+      const search = html`<div class="search-row">
         <label class="search"><span class="sr-only">Штрих-код или название</span>${ic('search')}<input class="input" id="sale-q" type="search" enterkeyhint="done" autocomplete="off" placeholder="Штрих-код или название" value="${U.saleQ}" data-in="saleQ" data-enter="saleEnter"></label>
         <button class="icon-btn accent" data-act="scanSale" aria-label="Сканировать камерой">${ic('scan')}</button>
-      </div>
-      <div class="suggest" id="sale-suggest">${suggestList(U.saleQ, 'addCart')}</div>
-      <section class="stack">
-        <div class="card-h"><h2 class="sec-title">Популярные товары</h2><span class="sec-sub">нажмите, чтобы добавить</span></div>
-        <div class="tiles">${pop.length ? pop.map((p) => html`<button class="tile" data-act="addCart" data-id="${p.id}"><span class="tile-name">${p.name}</span><span class="tile-foot"><span class="tile-price">${num(p.sell_price)}</span><span class="tile-stock">${p.stock} шт</span></span></button>`) : html`<div class="empty">${ic('box')}<span>Добавьте товары в каталог</span></div>`}</div>
-      </section>
+      </div>`;
+      let catalog;
+      if (wide) {
+        catalog = html`${search}
+        <div class="chips" aria-label="Категории">
+          <button class="chip${U.saleCat === 'all' ? ' on' : ''}" data-act="saleCat" data-v="all">Все</button>
+          ${CATS.map((x) => html`<button class="chip${U.saleCat === x.id ? ' on' : ''}" data-act="saleCat" data-v="${x.id}">${x.name}</button>`)}
+        </div>
+        <section class="stack"><div class="card-h"><h2 class="sec-title">Каталог</h2><span class="sec-sub">нажмите, чтобы добавить в чек</span></div><div id="sale-grid">${saleGrid()}</div></section>`;
+      } else {
+        const pop = D.popular.map(P).filter((p) => p && p.stock > 0).slice(0, 12);
+        catalog = html`${search}
+        <div class="suggest" id="sale-suggest">${suggestList(U.saleQ, 'addCart')}</div>
+        <section class="stack">
+          <div class="card-h"><h2 class="sec-title">Популярные товары</h2><span class="sec-sub">нажмите, чтобы добавить</span></div>
+          <div class="tiles">${pop.length ? pop.map(saleTile) : html`<div class="empty">${ic('box')}<span>Добавьте товары в каталог</span></div>`}</div>
+        </section>`;
+      }
+      return html`<div class="sale-layout"><div class="sale-main">${catalog}</div>
+      <div class="sale-side">
       <section class="card flush">
         <div class="card-h"><h2 class="sec-title">Корзина${lines.length ? html` <span class="faint">· ${pcs(cartUnits())}</span>` : ''}</h2>${lines.length ? html`<button class="link" data-act="clearCart">Очистить</button>` : ''}</div>
-        <div class="rows">${lines.length ? lines.map(cartLine) : empty('cart', 'Корзина пуста. Отсканируйте штрих-код или выберите товар выше.')}</div>
+        <div class="rows">${lines.length ? lines.map(cartLine) : empty('cart', wide ? 'Корзина пуста. Отсканируйте штрих-код или выберите товар в каталоге.' : 'Корзина пуста. Отсканируйте штрих-код или выберите товар выше.')}</div>
       </section>
       ${lines.length ? html`
       <section class="card">
@@ -1112,12 +1541,16 @@
           <div class="totals-row"><span>Товаров</span><b>${pcs(cartUnits())}</b></div>
           <div class="totals-row big"><span>Итого</span><span class="num">${money(total)}</span></div>
         </div>
-        <p class="hint">Окончательную сумму, сдачу и списание со склада считает сервер при пробитии чека.</p>
-      </section>` : ''}`;
+        ${NET.offline
+          ? html`<p class="note warn">${ic('offline')}<span>Нет связи с сервером: чек сохранится на этом устройстве и уйдёт на сервер сам, когда появится интернет.</span></p>`
+          : html`<p class="hint">Окончательную сумму, сдачу и списание со склада считает сервер при пробитии чека.</p>`}
+      </section>
+      ${wide ? html`<div class="checkout-inline">${checkoutBox('cart-total-side')}</div>` : ''}` : ''}
+      </div></div>`;
     },
     bar() {
-      if (!cartLines().length) return '';
-      return html`<div class="checkout-inner"><div class="checkout-sum"><span>Итого</span><b>${cnt(cartTotal(), 'cart-total')}&nbsp;сум</b></div><button class="btn btn-primary btn-lg${U.busy ? ' busy' : ''}" data-act="checkout"${raw(U.busy ? ' disabled' : '')}>${ic('receipt')}Пробить чек</button></div>`;
+      if (isWide() || !cartLines().length) return '';
+      return html`<div class="checkout-inner">${checkoutBox('cart-total')}</div>`;
     },
   };
 
@@ -1207,6 +1640,7 @@
             <button class="btn btn-primary" data-act="productToCart" data-id="${x.id}"${raw(x.stock <= 0 ? ' disabled' : '')}>${ic('cart')}В корзину</button>
             <button class="btn" data-act="incomeFor" data-id="${x.id}">${ic('income')}Приход</button>
           </div>
+          ${forecastBlock(d.forecast)}
           <section class="card flush"><div class="card-h"><h3 class="sec-title">Движение товара</h3></div>
             <div class="rows">${d.moves.length ? d.moves.map((m) => html`<button class="row" data-act="${DOC_ACT[m.type]}" data-id="${m.id}"><span class="row-ico ${m.type}">${ic(TYPE_ICON[m.type])}</span><span class="row-main"><span class="row-title">${docLabel(m.type, m.number)}</span><span class="row-sub"><span>${whenShort(m.created_at)}</span><span>${shortName({ name: m.employee })}</span></span></span><span class="amt ${m.qty > 0 ? 'plus' : 'minus'}">${signed(m.qty)} шт</span></button>`) : empty('journal', 'Операций с товаром ещё не было')}</div>
           </section>
@@ -1216,6 +1650,22 @@
           </div>
         </div>`);
     });
+  }
+
+  function forecastBlock(f) {
+    if (!f) return '';
+    const head = html`<div class="card-h"><h3 class="sec-title">${ic('trend', 'i-sm')} Прогноз спроса</h3>${f.history_days ? html`<span class="sec-sub">по ${f.history_days} ${plural(f.history_days, ['дню', 'дням', 'дням'])} продаж</span>` : ''}</div>`;
+    if (!f.history_days) return html`<section class="card">${head}<p class="sec-sub">Прогноз появится, когда у товара будет хотя бы один полный день продаж.</p></section>`;
+    if (f.per_day <= 0) return html`<section class="card">${head}<p class="sec-sub">За последние ${f.history_days} дн. продаж не было — спрос не прогнозируется.</p></section>`;
+    return html`<section class="card">${head}
+      <div class="kpis">
+        <div class="kpi"><span>Спрос в день</span><b>≈${dec(f.per_day)} шт</b><small>среднее 7 дн. ${dec(f.avg_7)} · ${f.history_days} дн. ${dec(f.avg_28)}</small></div>
+        <div class="kpi"><span>Тренд</span><b class="${f.trend_pct > 0 ? 'good' : f.trend_pct < 0 ? 'bad' : ''}">${f.trend_pct == null ? '—' : (f.trend_pct > 0 ? '+' : f.trend_pct < 0 ? '−' : '') + Math.abs(f.trend_pct) + '%'}</b><small>${f.trend_pct == null ? 'мало истории' : 'в неделю'}</small></div>
+        <div class="kpi"><span>Остатка хватит</span><b class="${f.stock <= 0 || f.days_left < 7 ? 'warn' : ''}">${f.stock <= 0 ? 'закончился' : f.days_left + ' ' + plural(f.days_left, ['день', 'дня', 'дней'])}</b><small>${f.stock > 0 && f.runs_out_on ? 'примерно до ' + fmtDate(dayDate(f.runs_out_on)) : ''}</small></div>
+        <div class="kpi"><span>Продадим за ${f.horizon_days} дней</span><b>≈${pcs(f.forecast_qty)}</b><small>${f.order_qty ? 'к заказу ' + pcs(f.order_qty) : 'запаса хватает'}</small></div>
+      </div>
+      ${f.order_qty ? html`<button class="btn" data-act="fcIncome" data-id="${f.product_id}" data-qty="${f.order_qty}">${ic('income')}В приход: ${pcs(f.order_qty)}</button>` : ''}
+    </section>`;
   }
 
   function marginText(buy, sell) {
@@ -1581,7 +2031,7 @@
     const who = shortName({ name: e.employee });
     let title, sub, side;
     if (e.type === 'sale') {
-      title = 'Продажа №' + e.number;
+      title = html`Продажа №${e.number} ${offlinePill(e)}`;
       sub = [who, PAY[e.payment].name, e.customer];
       side = html`<span class="amt plus">+${num(e.total)}</span>`;
     } else if (e.type === 'ret') {
@@ -1698,13 +2148,18 @@
     title: 'Ещё', tab: true,
     view() {
       return html`
-      <div class="menu-grid">${MORE.map(([to, label, icon]) => html`<button class="menu-btn" data-act="nav" data-to="${to}"><span class="qa-ico">${ic(icon)}</span><span>${label}</span></button>`)}</div>
+      <div class="menu-grid">${MORE.filter((m) => !m[3] || isOwner()).map(([to, label, icon]) => html`<button class="menu-btn" data-act="nav" data-to="${to}"><span class="qa-ico">${ic(icon)}</span><span>${label}</span></button>`)}</div>
       <section class="card">
         <div class="card-h"><span class="avatar lg ${D.me.role}">${initials(D.me.name)}</span><div class="row-main"><span class="label">Вы вошли как</span><span class="row-title">${D.me.name} · ${ROLES[D.me.role]}</span></div></div>
         <div class="btn-row"><button class="btn" data-act="switchUser">${ic('swap')}Сменить сотрудника</button><button class="btn" data-act="logout">${ic('logout')}Выйти</button></div>
       </section>
       ${isOwner() ? html`<section class="card">
-        <div class="card-h"><h2 class="sec-title">Магазин</h2><span class="sec-sub">печатается в чеке</span></div>
+        <div class="card-h"><h2 class="sec-title">Магазины</h2><span class="sec-sub">${D.stores.length} ${plural(D.stores.length, ['магазин', 'магазина', 'магазинов'])}</span></div>
+        <p class="sec-sub">Сейчас на этом устройстве: <b>${D.store.name}</b>. У каждого магазина свои товары, продавцы, чеки и отчёты.</p>
+        <div class="btn-row"><button class="btn" data-act="storePicker">${ic('swap')}Переключить</button><button class="btn" data-act="nav" data-to="stores">${ic('chart')}Сводка по всем</button></div>
+      </section>
+      <section class="card">
+        <div class="card-h"><h2 class="sec-title">Этот магазин</h2><span class="sec-sub">печатается в чеке</span></div>
         <form class="stack" data-submit="saveStore">
           <div class="field"><label for="st-name">Название</label><input class="input" id="st-name" name="name" maxlength="60" autocomplete="off" value="${D.store.name}" data-keep></div>
           <div class="field"><label for="st-addr">Адрес</label><input class="input" id="st-addr" name="address" maxlength="120" autocomplete="off" value="${D.store.address || ''}" data-keep></div>
@@ -1713,7 +2168,8 @@
       </section>` : ''}
       <section class="card">
         <div class="card-h"><h2 class="sec-title">Данные</h2>${D.store.is_demo ? html`<span class="pill warn">демо-данные</span>` : html`<span class="pill good">${ic('db')}на сервере</span>`}</div>
-        <p class="sec-sub">Товары, чеки, приходы, возвраты и отчёты хранятся на сервере магазина и считаются там же — их видно с любого телефона после входа. На этом устройстве хранятся только черновики: корзина, незаконченный приход и пересчёт.</p>
+        <p class="sec-sub">Товары, чеки, приходы, возвраты, отчёты и прогнозы хранятся на сервере и считаются там же — их видно с любого телефона после входа. На этом устройстве — черновики (корзина, незаконченный приход и пересчёт) и копия каталога, чтобы продавать без связи.</p>
+        <p class="sec-sub">Нет связи с сервером — продажа продолжается: чек сохраняется на устройстве и уходит на сервер сам, когда связь вернётся${Q.length ? html`. <button class="link" data-act="openQueue">Сейчас на устройстве: ${Q.length} ${plural(Q.length, ['чек', 'чека', 'чеков'])}</button>` : ''}.</p>
         ${isOwner() && D.features.demo ? html`${D.store.is_demo ? html`<p class="sec-sub">Сейчас загружен пример магазина. Чтобы вести свой учёт, начните с чистого листа — сотрудники и название магазина сохранятся.</p>` : ''}
         <div class="btn-row"><button class="btn" data-act="resetDemo">Загрузить демо заново</button><button class="btn btn-danger" data-act="wipeData">Начать с чистого листа</button></div>` : ''}
       </section>`;
@@ -1772,7 +2228,7 @@
           <div class="rc-row"><span>Кассир</span><span>${nameOf(s.employee)}</span></div>
           ${s.customer ? html`<div class="rc-row"><span>Покупатель</span><span>${s.customer}</span></div>` : ''}
           <hr class="rc-hr">
-          ${s.items.map((i) => html`<div class="rc-item"><div>${i.name}</div><div class="rc-row"><span class="rc-muted">${i.qty} × ${num(i.price)}</span><span>${num(i.sum)}</span></div></div>`)}
+          ${s.items.map((i) => html`<div class="rc-item"><div>${i.name}</div><div class="rc-row"><span class="rc-muted">${i.qty} × ${num(i.price)}</span><span>${num(i.sum)}</span></div>${i.shortage ? html`<div class="rc-muted">не было на складе при отправке: ${i.shortage} шт</div>` : ''}</div>`)}
           <hr class="rc-hr">
           <div class="rc-row rc-total"><span>ИТОГО</span><span>${num(s.total)}</span></div>
           <div class="rc-row"><span>Оплата</span><span>${PAY[s.payment].name}</span></div>
@@ -1780,16 +2236,94 @@
           ${s.refunds.length ? html`<hr class="rc-hr">${s.refunds.map((r) => html`<div class="rc-row rc-ret"><span>Возврат ${retNo(r)}, ${fmtDate(r.created_at)}</span><span>−${num(r.total)}</span></div>`)}` : ''}
           <hr class="rc-hr">
           <div class="rc-center rc-muted">Суммы в узбекских сумах (UZS)<br>Спасибо за покупку!</div>`;
+    const short = sum(s.items, (i) => i.shortage || 0);
+    const priceDiff = s.client_total != null ? s.total - s.client_total : 0;
+    const offlineNote = s.synced_at ? html`<div class="note ${s.conflict ? 'warn' : ''}">${ic(s.conflict ? 'alert' : 'offline')}<span>
+        Пробит без связи ${fmtDT(s.created_at)}, отправлен на сервер ${fmtDT(s.synced_at)}.
+        ${short ? ` На складе не хватило ${pcs(short)} — остаток списан до нуля; сверьте остатки инвентаризацией или проведите приход.` : ''}
+        ${priceDiff ? ` На устройстве сумма была ${money(s.client_total)}, по ценам сервера — ${money(s.total)}.` : ''}</span></div>` : '';
     openSheet(html`${head}
       <div class="sheet-body">
         ${fresh
           ? html`<div class="printer"><div class="printer-slot" aria-hidden="true"></div><div class="paper-feed"><div class="receipt printing">${paper}</div></div></div>`
           : html`<div class="receipt">${paper}</div>`}
+        ${offlineNote}
         <div class="btn-row">${fresh
           ? html`<button class="btn btn-primary btn-lg" data-act="closeSheet">${ic('plus')}Новая продажа</button>`
           : html`${canReturn ? html`<button class="btn" data-act="refundFor" data-id="${s.id}">${ic('refund')}Оформить возврат</button>` : ''}<button class="btn btn-primary" data-act="closeSheet">Закрыть</button>`}</div>
       </div>`);
   }
+  /** Чек, сохранённый на устройстве без связи: номер присвоит сервер при отправке. */
+  function openQueuedReceipt(e) {
+    const change = e.payment === 'cash' && e.received > e.client_total ? e.received - e.client_total : 0;
+    openSheet(html`<div class="sheet-h"><div class="done"><svg class="ok-check" viewBox="0 0 52 52" aria-hidden="true"><circle cx="26" cy="26" r="23"/><path d="m15 27 7 7 15-15"/></svg><div><h2>Чек сохранён на устройстве</h2><div class="sec-sub">${money(e.client_total)} · ${PAY[e.payment].name} · нет связи с сервером</div></div></div><button class="icon-btn" data-act="closeSheet" aria-label="Закрыть">${ic('x')}</button></div>
+      <div class="sheet-body">
+        <div class="receipt">
+          <div class="rc-center"><div class="rc-store">${e.store_name}</div>${D.store.address ? html`<div class="rc-muted">${D.store.address}</div>` : ''}</div>
+          <hr class="rc-hr">
+          <div class="rc-row"><span>ЧЕК (без связи)</span><span>${fmtDT(e.sold_at)}</span></div>
+          <div class="rc-row"><span>Кассир</span><span>${e.employee_name}</span></div>
+          ${e.customer ? html`<div class="rc-row"><span>Покупатель</span><span>${e.customer}</span></div>` : ''}
+          <hr class="rc-hr">
+          ${e.items.map((i) => html`<div class="rc-item"><div>${i.name}</div><div class="rc-row"><span class="rc-muted">${i.qty} × ${num(i.price)}</span><span>${num(i.qty * i.price)}</span></div></div>`)}
+          <hr class="rc-hr">
+          <div class="rc-row rc-total"><span>ИТОГО</span><span>${num(e.client_total)}</span></div>
+          <div class="rc-row"><span>Оплата</span><span>${PAY[e.payment].name}</span></div>
+          ${change ? html`<div class="rc-row"><span>Получено</span><span>${num(e.received)}</span></div><div class="rc-row"><span>Сдача</span><span>${num(change)}</span></div>` : ''}
+          <hr class="rc-hr">
+          <div class="rc-center rc-muted">Номер чека присвоит сервер<br>после отправки</div>
+        </div>
+        <p class="hint">Чек уйдёт на сервер автоматически, как только появится связь. Повторная отправка безопасна: сервер сохранит его один раз.</p>
+        <button class="btn btn-primary btn-lg" data-act="closeSheet">${ic('plus')}Новая продажа</button>
+      </div>`);
+  }
+
+  /** Очередь чеков на устройстве: что ждёт отправки и что сервер не принял. */
+  function openQueue() {
+    const mine = myQueue();
+    const pend = mine.filter((e) => e.status !== 'failed').length;
+    const failed = mine.filter((e) => e.status === 'failed').length;
+    const many = new Set(Q.map((e) => e.store_id)).size > 1;
+    const rows = Q.slice().reverse().map((e) => html`<div class="row">
+        <span class="row-ico ${e.status === 'failed' ? 'ret' : 'sale'}">${ic(e.status === 'failed' ? 'alert' : 'receipt')}</span>
+        <span class="row-main"><span class="row-title">${money(e.client_total)} · ${PAY[e.payment].name}</span>
+          <span class="row-sub"><span>${whenShort(e.sold_at)}</span><span>${shortName({ name: e.employee_name })}</span><span>${pcs(queueUnits(e))}</span>${many ? html`<span>${e.store_name}</span>` : ''}</span>
+          ${e.status === 'failed' ? html`<span class="row-sub bad">${e.error}</span>` : D.me && e.employee_id !== D.me.id ? html`<span class="row-sub">уйдёт, когда ${e.employee_name} войдёт на этом устройстве</span>` : ''}</span>
+        ${e.status === 'failed' ? html`<button class="btn btn-sm btn-danger" data-act="queueDrop" data-id="${e.client_uuid}">Удалить</button>` : ''}
+      </div>`);
+    openSheet(html`${sheetHead('Чеки на устройстве', 'Пробиты без связи с сервером')}
+      <div class="sheet-body">
+        <p class="sec-sub">${NET.offline ? 'Связи с сервером сейчас нет. ' : ''}Чеки уходят на сервер сами, по порядку, под тем сотрудником, который их пробил. Если товара на складе окажется меньше, сервер всё равно примет чек и отметит расхождение.</p>
+        <section class="card flush"><div class="rows">${Q.length ? rows : empty('check', 'Все чеки отправлены на сервер')}</div></section>
+        <div class="btn-row">
+          ${pend ? html`<button class="btn btn-primary" data-act="queueSync">${ic('sync')}Отправить сейчас</button>` : ''}
+          ${failed ? html`<button class="btn" data-act="queueRetry">${ic('sync')}Повторить с ошибкой</button>` : ''}
+          <button class="btn" data-act="closeSheet">Закрыть</button>
+        </div>
+      </div>`);
+  }
+
+  /** Плашка под заголовком: нет связи, чеки в очереди, отправка. */
+  function renderNet() {
+    const el = $('#net');
+    if (!el) return;
+    if (!D.me) { el.hidden = true; return; }
+    const mine = myQueue();
+    const failed = mine.filter((e) => e.status === 'failed').length;
+    const pend = mine.length - failed;
+    const others = Q.length - mine.length;
+    const checks = (n) => `${n} ${plural(n, ['чек', 'чека', 'чеков'])}`;
+    let cls = '', icon = 'offline', text = '';
+    if (failed) { cls = 'bad'; icon = 'alert'; text = `${checks(failed)} не ${plural(failed, ['принят', 'приняты', 'приняты'])} сервером — посмотреть`; }
+    else if (NET.offline) { cls = 'warn'; text = pend ? `Нет связи · ${checks(pend)} на устройстве, ${plural(pend, ['уйдёт', 'уйдут', 'уйдут'])} на сервер сам${pend === 1 ? '' : 'и'}` : 'Нет связи с сервером · продавать можно, чеки сохранятся на устройстве'; }
+    else if (SYNC.busy && pend) { cls = 'accent'; icon = 'sync'; text = `Отправляем на сервер ${checks(pend)}…`; }
+    else if (pend) { cls = 'accent'; icon = 'sync'; text = `${checks(pend)} ${plural(pend, ['ждёт', 'ждут', 'ждут'])} отправки на сервер`; }
+    else if (others) { cls = 'warn'; icon = 'receipt'; text = `${checks(others)} другого сотрудника ${plural(others, ['ждёт', 'ждут', 'ждут'])} его входа`; }
+    el.hidden = !text;
+    el.className = 'net ' + cls;
+    setHTML(el, text ? html`${ic(icon, 'i-sm')}<span>${text}</span>${ic('right', 'i-sm')}` : '');
+  }
+
   function openReturnDoc(rOrId) {
     if (typeof rOrId !== 'object') {
       openLoading('Возврат', '', () => api('GET', '/returns/' + rOrId).then((x) => x.return), openReturnDoc);
@@ -1869,7 +2403,8 @@
     U.busy = true;
     refreshPin();
     try {
-      const r = await api('POST', '/login', { employee_id: st.pick, pin: st.pin });
+      if (D.me && myQueue().length) await syncQueue(true); // чеки прежнего сотрудника уходят под его входом
+      const r = await api('POST', '/login', { employee_id: st.pick, pin: st.pin, store_id: D.me ? D.store.id : deviceStore() });
       const old = TOKEN;
       setToken(r.token);
       if (old && old !== r.token) {
@@ -1893,7 +2428,18 @@
   }
   async function startSession() {
     cache.clear();
-    const b = await api('GET', '/bootstrap');
+    NET.fromSnapshot = false;
+    let b;
+    try {
+      b = await api('GET', '/bootstrap');
+    } catch (e) {
+      // сервер недоступен, но этот вход уже работал на устройстве — продаём по сохранённому каталогу
+      const snap = isOfflineErr(e) && loadSnapshot();
+      if (!snap) throw e;
+      b = snap;
+      NET.offline = true;
+      NET.fromSnapshot = true;
+    }
     applyBootstrap(b);
     U.auth = null;
     U.pin = { pick: null, pin: '', err: '' };
@@ -1903,21 +2449,26 @@
     closeSheet();
     lastRoute = null;
     render();
+    renderNet();
+    setTimeout(() => syncQueue(), 300);
   }
   function signOut(msg) {
+    lsSet(SNAP_KEY, null);
     setToken(null);
     D.me = null;
     cache.clear();
     U.pin = { pick: null, pin: '', err: '' };
     if (!$('#scan').hidden) Scan.close();
     closeSheet();
+    renderNet();
     showAuth(msg);
   }
   async function showAuth(msg) {
     U.auth = { msg };
     render();
     try {
-      const o = await api('GET', '/options');
+      const ds = deviceStore();
+      const o = await api('GET', '/options' + (ds ? '?store_id=' + ds : ''));
       if (D.me) return;
       U.auth = { options: o, msg };
     } catch (e) {
@@ -1930,6 +2481,8 @@
     return html`<section class="auth">
       <div class="auth-head"><span class="auth-logo">${ic('store', 'i-lg')}</span><div><h2>${o.store.name}</h2><p class="sec-sub">Выберите себя и введите PIN</p></div></div>
       ${U.auth.msg ? html`<p class="auth-msg">${U.auth.msg}</p>` : ''}
+      ${(o.stores || []).length > 1 ? html`<div class="field"><label for="login-store">Магазин на этом устройстве</label><select class="select" id="login-store" data-ch="loginStore">${o.stores.map((x) => html`<option value="${x.id}"${raw(x.id === o.store.id ? ' selected' : '')}>${x.name}</option>`)}</select></div>` : ''}
+      ${Q.length ? html`<p class="note warn">${ic('offline')}<span>На устройстве ${Q.length} ${plural(Q.length, ['чек', 'чека', 'чеков'])}, пробитых без связи. Они уйдут на сервер, когда войдёт сотрудник, который их пробил: ${[...new Set(Q.map((e) => e.employee_name))].join(', ')}.</span></p>` : ''}
       <div class="emp-grid">${o.employees.map(empTile)}</div>
       <div id="pin-area">${U.pin.pick ? pinPad() : ''}</div>
       ${o.demo_hint ? html`<p class="hint center">${o.demo_hint}</p>` : ''}
@@ -2057,7 +2610,10 @@
 
     $('#title').textContent = scr.title;
     if (entering && !first && !reduceMotion()) restartAnim($('#title'), 'title-in');
-    $('#eyebrow').textContent = D.store.name + (D.store.is_demo ? ' · демо' : '');
+    const storeLabel = D.store.name + (D.store.is_demo ? ' · демо' : '');
+    setHTML($('#eyebrow'), isOwner()
+      ? html`<button class="store-btn" data-act="storePicker" aria-label="Магазин: ${storeLabel}. Переключить">${storeLabel}${ic('down', 'i-sm')}</button>`
+      : storeLabel);
     $('#back').hidden = !!scr.tab;
     const e = D.me;
     setHTML($('#who'), html`<span class="avatar ${e.role}">${initials(e.name)}</span><span class="who-text"><span class="who-name">${e.name.split(/\s+/)[0]}</span><span class="who-role">${ROLES[e.role]}</span></span>`);
@@ -2177,11 +2733,78 @@
     switchUser() { openSwitch(); },
     switchTo(el) { openSwitch(Number(el.dataset.id)); },
     logout() {
+      const n = myQueue().length;
       confirmBox({
-        title: 'Выйти из кассы?', text: 'Корзина и черновики на этом устройстве сохранятся.', ok: 'Выйти',
+        title: 'Выйти из кассы?',
+        text: n
+          ? `На устройстве ${n} ${plural(n, ['неотправленный чек', 'неотправленных чека', 'неотправленных чеков'])}. Они уйдут на сервер, когда ${D.me.name} снова войдёт на этом устройстве.`
+          : 'Корзина и черновики на этом устройстве сохранятся.',
+        ok: 'Выйти',
         onOk() {
           api('POST', '/logout').catch(() => {});
           signOut('');
+        },
+      });
+    },
+
+    // магазины (владелец)
+    storePicker() { if (isOwner()) openStorePicker(); },
+    switchStore(el) { switchStore(el.dataset.id, el.tagName === 'BUTTON' && !el.classList.contains('row') ? el : null); },
+    newStore() { storeForm(); },
+    stPeriod(el) { U.stPeriod = el.dataset.v; render(); },
+
+    // прогнозы
+    fcThr(el) { U.fcThr = Number(el.dataset.v); render(); },
+    fcDead(el) { U.fcDead = Number(el.dataset.v); render(); },
+    fcIncome(el) {
+      const p = addIncomeLine(el.dataset.id, Number(el.dataset.qty) || 0);
+      if (!p) return;
+      saveLocal();
+      closeSheet();
+      if (route() !== 'income') U.backTo = route();
+      go('income');
+      toast(`В приходе: ${p.name} — ${pcs(Number(el.dataset.qty) || 1)}`, 'ok');
+    },
+    fcAllIncome() {
+      const f = cache.get(`forecast:${U.fcThr}:${U.fcDead}`);
+      const list = f && f.data ? f.data.running_out.filter((r) => r.order_qty > 0) : [];
+      let n = 0;
+      list.forEach((r) => { if (addIncomeLine(r.product_id, r.order_qty)) n++; });
+      saveLocal();
+      if (!n) return;
+      U.backTo = route();
+      go('income');
+      toast(`В приход добавлено ${n} ${plural(n, ['позиция', 'позиции', 'позиций'])} по прогнозу`, 'ok');
+    },
+
+    // чеки без связи
+    openQueue() { openQueue(); },
+    queueSync(el) {
+      run(el, async () => {
+        await syncQueue(true);
+        if (NET.offline) toast('Связи с сервером всё ещё нет — чеки отправятся сами', 'bad');
+        openQueue();
+      });
+    },
+    queueRetry(el) {
+      myQueue().forEach((e) => { if (e.status === 'failed') { e.status = 'pending'; e.error = null; } });
+      saveQueue();
+      ACT.queueSync(el);
+    },
+    queueDrop(el) {
+      const e = Q.find((x) => x.client_uuid === el.dataset.id);
+      if (!e) return;
+      confirmBox({
+        title: 'Удалить чек с устройства?',
+        text: `Чек на ${money(e.client_total)} не попадёт в учёт, остатки на сервере не изменятся. Удаляйте, только если продажи на самом деле не было.`,
+        ok: 'Удалить', danger: true,
+        onOk() {
+          Q = Q.filter((x) => x !== e);
+          saveQueue();
+          applyStock();
+          renderNet();
+          render();
+          openQueue();
         },
       });
     },
@@ -2202,8 +2825,9 @@
       if (!r.ok) { toast(r.msg, 'bad'); shake(el); return; }
       if (el.classList.contains('sug')) U.saleQ = '';
       render();
-      flyTo(from, $('#bar .checkout-sum') || $('.tab[data-to="sale"] .i'));
+      flyTo(from, $('.checkout-inline .checkout-sum') || $('#bar .checkout-sum') || $('.tab[data-to="sale"] .i'));
     },
+    saleCat(el) { U.saleCat = el.dataset.v; render(); },
     cartQty(el) {
       const line = L.cart.items.find((l) => l.pid === Number(el.dataset.id));
       if (line) setCartQty(line.pid, line.qty + Number(el.dataset.d));
@@ -2455,11 +3079,16 @@
     },
     newProductCode(el) { productForm(null, { barcode: el.dataset.code }); },
     scanClose() { Scan.close(); },
+    nativeSettings() { if (NATIVE) NATIVE.openSettings(); },
   };
 
   let jTimer = 0;
   const IN = {
-    saleQ(el) { U.saleQ = el.value; setHTML($('#sale-suggest'), suggestList(U.saleQ, 'addCart')); },
+    saleQ(el) {
+      U.saleQ = el.value;
+      if (isWide()) setHTML($('#sale-grid'), saleGrid());
+      else setHTML($('#sale-suggest'), suggestList(U.saleQ, 'addCart'));
+    },
     customer(el) { L.cart.customer = el.value; saveLocal(); },
     received(el) {
       L.cart.received = el.value.replace(/[^\d]/g, '');
@@ -2515,6 +3144,11 @@
 
   const CH = {
     cartQtySet(el) { setCartQty(el.dataset.id, parseQty(el.value) || 0); },
+    loginStore(el) {
+      lsSet(STORE_KEY, el.value);
+      U.pin = { pick: null, pin: '', err: '' };
+      showAuth(U.auth && U.auth.msg);
+    },
     prodSort(el) { U.prodSort = el.value; withVT(() => setHTML($('#plist'), productList())); },
     async scanPhoto(el) {
       const file = el.files && el.files[0];
@@ -2610,11 +3244,33 @@
         }
       });
     },
+    createStore(form) {
+      const f = Object.fromEntries(new FormData(form));
+      const errEl = $('#ns-err');
+      const name = String(f.name || '').trim();
+      if (!name) { errEl.textContent = 'Введите название магазина'; return; }
+      run(form.querySelector('[type="submit"]'), async () => {
+        let r;
+        try {
+          r = await api('POST', '/stores', { name, address: String(f.address || '').trim() || null });
+        } catch (e) {
+          if (e.status === 422) { errEl.textContent = e.message; return; }
+          throw e;
+        }
+        if (myQueue().length) await syncQueue(true);
+        await api('POST', `/stores/${r.store.id}/switch`);
+        await startSession();
+        go('home');
+        toast(`Магазин «${r.store.name}» создан. Добавьте товары и продавцов`, 'ok');
+      });
+    },
     saveStore(form) {
       const f = Object.fromEntries(new FormData(form));
       run(form.querySelector('[type="submit"]'), async () => {
         const r = await api('PUT', '/store', { name: String(f.name || '').trim(), address: String(f.address || '').trim() || null });
         D.store = r.store;
+        D.stores = D.stores.map((x) => (x.id === r.store.id ? r.store : x));
+        saveSnapshot();
         render();
         toast('Данные магазина сохранены', 'ok');
       });
@@ -2704,18 +3360,46 @@
       closeSheet();
       render();
     });
-    // вернулись в приложение — подтягиваем свежие данные (продажи с других телефонов)
+    // вернулись в приложение — подтягиваем свежие данные (продажи с других телефонов) и отправляем очередь
     document.addEventListener('visibilitychange', () => {
       if (document.hidden || !D.me) return;
       invalidate();
       refreshCatalog(true);
       render();
+      heartbeat();
     });
+    const onWide = () => { if (D.me) render(); };
+    if (WIDE.addEventListener) WIDE.addEventListener('change', onWide);
+    else if (WIDE.addListener) WIDE.addListener(onWide);
+    window.addEventListener('online', () => setTimeout(heartbeat, 500));
+    window.addEventListener('offline', () => setNet(true));
+    setInterval(heartbeat, 15000);
     window.addEventListener('storage', (e) => {
-      if (e.key !== LOCAL_KEY || !e.newValue) return;
+      if (e.key === QUEUE_KEY) {
+        try { Q = JSON.parse(e.newValue || '[]') || []; } catch (err) { Q = []; }
+        applyStock();
+        renderNet();
+        if (D.me) render();
+        return;
+      }
+      if (!D.store.id || e.key !== draftKey(D.store.id) || !e.newValue) return;
       try { L = JSON.parse(e.newValue); if (D.me) render(); } catch (err) { /* чужой формат — игнорируем */ }
     });
   }
+
+  // Кнопка «Назад» в Android-обёртке: закрывает диалог, сканер или лист, затем ведёт к главной.
+  // false — приложению нечего закрывать, обёртка сворачивается.
+  window.kassaBack = () => {
+    if (!$('#dialog').hidden) { closeDialog(); return true; }
+    if (!$('#scan').hidden) { Scan.close(); return true; }
+    if (!$('#sheet').hidden) { closeSheet(); return true; }
+    if (D.me && route() !== 'home') {
+      if (SCREENS[route()].tab) go('home');
+      else ACT.back();
+      return true;
+    }
+    return false;
+  };
 
   async function init() {
     document.documentElement.lang = 'ru';

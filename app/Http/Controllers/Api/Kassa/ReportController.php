@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Kassa;
 
+use App\Services\Kassa\KassaForecastService;
 use App\Services\Kassa\KassaReportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -9,11 +10,26 @@ use Illuminate\Validation\Rule;
 
 class ReportController extends KassaController
 {
-    public function __construct(private readonly KassaReportService $reports) {}
+    public function __construct(private readonly KassaReportService $reports, private readonly KassaForecastService $forecasts) {}
 
+    /** Главная: итоги дня, низкие остатки, последние продажи и короткий прогноз. */
     public function dashboard(): JsonResponse
     {
-        return response()->json($this->reports->dashboard());
+        return response()->json($this->reports->dashboard() + ['forecast' => $this->forecasts->overview()]);
+    }
+
+    /** Прогнозы: что скоро закончится (с количеством к заказу) и товары без продаж. */
+    public function forecasts(Request $request): JsonResponse
+    {
+        $data = $this->check($request, [
+            'threshold' => ['nullable', 'integer', Rule::in(KassaForecastService::THRESHOLDS)],
+            'dead_days' => ['nullable', 'integer', Rule::in(KassaForecastService::DEAD_DAYS)],
+        ]);
+
+        return response()->json($this->forecasts->report(
+            (int) ($data['threshold'] ?? KassaForecastService::DEFAULT_THRESHOLD),
+            (int) ($data['dead_days'] ?? KassaForecastService::DEFAULT_DEAD_DAYS),
+        ));
     }
 
     public function show(Request $request): JsonResponse

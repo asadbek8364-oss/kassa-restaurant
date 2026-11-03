@@ -154,8 +154,8 @@ Route::prefix('v1')->group(function () {
 | «Касса и склад» (public/kassa) — /api/kassa
 |--------------------------------------------------------------------------
 |
-| Сотрудники входят по PIN и получают Bearer-токен (kassa.auth).
-| Все суммы, остатки и отчёты считаются на сервере.
+| Сотрудники входят по PIN и получают Bearer-токен (kassa.auth), который помнит магазин.
+| Данные каждого магазина изолированы (StoreScope). Все суммы, остатки, отчёты и прогнозы считаются на сервере.
 |
 */
 Route::prefix('kassa')->name('kassa.')->group(function () {
@@ -165,11 +165,13 @@ Route::prefix('kassa')->name('kassa.')->group(function () {
 
     Route::middleware(['kassa.auth', 'throttle:kassa-api'])->group(function () {
         Route::post('/logout', [KassaAuth::class, 'logout'])->name('logout');
+        Route::get('/ping', [KassaAuth::class, 'ping'])->name('ping');
         Route::get('/bootstrap', KassaBootstrap::class)->name('bootstrap');
 
         Route::get('/dashboard', [KassaReports::class, 'dashboard'])->name('dashboard');
         Route::get('/reports', [KassaReports::class, 'show'])->name('reports');
         Route::get('/journal', [KassaReports::class, 'journal'])->name('journal');
+        Route::get('/forecasts', [KassaReports::class, 'forecasts'])->name('forecasts');
 
         Route::get('/products', [KassaProducts::class, 'index'])->name('products.index');
         Route::get('/products/barcode', [KassaProducts::class, 'barcode'])->name('products.barcode');
@@ -180,6 +182,7 @@ Route::prefix('kassa')->name('kassa.')->group(function () {
         Route::get('/sales', [KassaSales::class, 'index'])->name('sales.index');
         Route::get('/sales/{sale}', [KassaSales::class, 'show'])->whereNumber('sale')->name('sales.show');
         Route::post('/sales', [KassaSales::class, 'store'])->name('sales.store');
+        Route::post('/sales/sync', [KassaSales::class, 'sync'])->name('sales.sync');
 
         Route::get('/returns', [KassaRefunds::class, 'index'])->name('returns.index');
         Route::get('/returns/{refund}', [KassaRefunds::class, 'show'])->whereNumber('refund')->name('returns.show');
@@ -202,6 +205,9 @@ Route::prefix('kassa')->name('kassa.')->group(function () {
             Route::put('/employees/{employee}', [KassaEmployees::class, 'update'])->whereNumber('employee')->name('employees.update');
             Route::post('/employees/{employee}/toggle', [KassaEmployees::class, 'toggle'])->whereNumber('employee')->name('employees.toggle');
             Route::put('/store', [KassaStore::class, 'update'])->name('store.update');
+            Route::get('/stores', [KassaStore::class, 'index'])->name('stores.index');
+            Route::post('/stores', [KassaStore::class, 'create'])->name('stores.store');
+            Route::post('/stores/{store}/switch', [KassaStore::class, 'switch'])->whereNumber('store')->name('stores.switch');
             Route::post('/data/demo', [KassaStore::class, 'demo'])->name('data.demo');
             Route::post('/data/wipe', [KassaStore::class, 'wipe'])->name('data.wipe');
         });

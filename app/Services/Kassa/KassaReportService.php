@@ -226,7 +226,7 @@ class KassaReportService
 
     public function recentSales(int $limit, ?int $employeeId = null): array
     {
-        return Sale::with('employee')->withCount('refunds')->withSum('items as units', 'qty')
+        return Sale::with('employee')->withCount('refunds')->withSum('items as units', 'qty')->withSum('items as shortage_units', 'shortage')
             ->when($employeeId, fn ($q) => $q->where('employee_id', $employeeId))
             ->orderByDesc('created_at')->orderByDesc('id')->limit($limit)->get()
             ->map(fn ($s) => Presenter::saleSummary($s))->all();
@@ -346,6 +346,7 @@ class KassaReportService
         $entries = collect();
         foreach ($selected as $k) {
             $docs = $queries[$k]()->with('employee')
+                ->when($k === 'sale', fn ($b) => $b->withSum('items as shortage_units', 'shortage'))
                 ->when($k === 'ret', fn ($b) => $b->with('sale'))
                 ->when($k === 'inc', fn ($b) => $b->withSum('items as units', 'qty'))
                 ->when($k === 'aud', fn ($b) => $b->with('items'))
@@ -424,7 +425,7 @@ class KassaReportService
         ];
 
         return $base + match ($type) {
-            'sale' => ['payment' => $d->payment, 'customer' => $d->customer, 'total' => $d->total],
+            'sale' => ['payment' => $d->payment, 'customer' => $d->customer, 'total' => $d->total, 'offline' => $d->isOffline(), 'conflict' => Presenter::saleConflict($d)],
             'ret' => ['sale_number' => $d->sale?->number, 'reason' => $d->reason, 'total' => $d->total],
             'inc' => ['supplier' => $d->supplier, 'total' => $d->total, 'units' => (int) $d->units],
             'aud' => collect(Presenter::audit($d, false))->only(['checked', 'shortage_qty', 'surplus_qty'])->all(),

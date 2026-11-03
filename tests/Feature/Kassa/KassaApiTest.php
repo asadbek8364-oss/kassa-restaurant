@@ -395,13 +395,21 @@ class KassaApiTest extends TestCase
         $this->enableDemo();
         $this->artisan('kassa:demo', ['--force' => true])->assertSuccessful();
 
-        $this->assertSame(48, Product::count());
+        $this->assertSame(50, Product::count());
+        $this->assertSame(2, Store::count());
         $owner = Employee::where('role', 'owner')->firstOrFail();
         $this->loginAs($owner, '1111');
 
         $dashboard = $this->getJson('/api/kassa/dashboard')->assertOk();
         $this->assertSame(8, $dashboard->json('today.checks'));
         $this->assertCount(6, $dashboard->json('low_stock'));
+        $this->assertSame(2, $dashboard->json('forecast.dead_count'));
+        $this->assertGreaterThan(0, $dashboard->json('forecast.running_out_count'));
         $this->getJson('/api/kassa/reports?period=month')->assertOk()->assertJsonPath('series.unit', 'day');
+
+        $stores = $this->getJson('/api/kassa/stores')->assertOk();
+        $this->assertSame(['Mobi Aksessuar', 'Mobi Aksessuar Chilonzor'], array_column($stores->json('stores'), 'name'));
+        $this->assertSame(4, $stores->json('stores.1.summary.checks'));
+        $this->assertSame(12, $stores->json('total.checks'));
     }
 }

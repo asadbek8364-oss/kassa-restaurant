@@ -2,11 +2,14 @@
 
 namespace App\Models\Kassa;
 
+use App\Models\Kassa\Concerns\BelongsToStore;
 use Illuminate\Database\Eloquent\Model;
 
 /** Приход товара от поставщика. */
 class Income extends Model
 {
+    use BelongsToStore;
+
     public const OPENING_SUPPLIER = 'Начальный остаток';
 
     protected $table = 'kassa_incomes';

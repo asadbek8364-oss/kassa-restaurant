@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Касса и склад</string>
+    <string name="offline_title">Нет связи с сервером</string>
+    <string name="offline_text">Проверьте интернет. Как только связь появится, касса откроется сама.\n\nЧеки, пробитые без связи, сохранены на этом телефоне и уйдут на сервер автоматически.</string>
+    <string name="offline_server">Сервер кассы не отвечает (%1$s). Попробуйте чуть позже.</string>
+    <string name="retry">Повторить</string>
+    <string name="no_camera_app">На телефоне нет приложения камеры — введите цифры штрих-кода вручную</string>
+</resources>

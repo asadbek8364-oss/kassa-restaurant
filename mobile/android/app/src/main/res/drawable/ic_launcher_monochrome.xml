@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Одноцветный значок для тематических иконок Android 13+ -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <group android:pivotX="256" android:pivotY="256" android:scaleX="0.8" android:scaleY="0.8">
+        <path
+            android:pathData="M212,114h88a26,26 0,0 1,26 26v232a26,26 0,0 1,-26 26h-88a26,26 0,0 1,-26 -26v-232a26,26 0,0 1,26 -26z"
+            android:strokeWidth="18"
+            android:strokeColor="#FFFFFF" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M240,136h32a4,4 0,0 1,0 8h-32a4,4 0,0 1,0 -8zM212,196h8v120h-8zM226,196h4v120h-4zM236,196h10v120h-10zM252,196h4v120h-4zM262,196h8v120h-8zM276,196h12v120h-12zM294,196h6v120h-6zM237,350h38a5,5 0,0 1,0 10h-38a5,5 0,0 1,0 -10z" />
+    </group>
+</vector>

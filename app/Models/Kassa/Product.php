@@ -2,10 +2,13 @@
 
 namespace App\Models\Kassa;
 
+use App\Models\Kassa\Concerns\BelongsToStore;
 use Illuminate\Database\Eloquent\Model;
 
 class Product extends Model
 {
+    use BelongsToStore;
+
     public const CATEGORIES = ['chargers', 'cables', 'cases', 'screen', 'audio', 'accessories'];
 
     protected $table = 'kassa_products';
