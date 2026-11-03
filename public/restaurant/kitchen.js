@@ -30,6 +30,7 @@
     R.$('#sound-btn').setAttribute('aria-pressed', K.sound ? 'true' : 'false');
     if (K.sound && !R.audioReady()) R.$('#unlock').hidden = false;
     R.keepAwake();
+    R.live = () => refresh();
     tick();
     setInterval(tick, 1000);
     refresh();

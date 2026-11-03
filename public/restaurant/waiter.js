@@ -30,6 +30,7 @@
     R.onNetwork = (ok) => { R.$('#net').hidden = ok; R.set(R.$('#net'), 'Нет связи'); };
     R.keepAwake();
     window.addEventListener('hashchange', route);
+    R.live = () => refresh();
     await loadMenu();
     await refresh();
     route();

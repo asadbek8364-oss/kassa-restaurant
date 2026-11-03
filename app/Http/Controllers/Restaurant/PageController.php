@@ -47,7 +47,7 @@ class PageController extends Controller
     public function show(string $app): Response
     {
         return response()
-            ->view("restaurant.{$app}", ['app' => $app, 'meta' => self::APPS[$app], 'v' => $this->version($app)])
+            ->view("restaurant.{$app}", ['app' => $app, 'meta' => self::APPS[$app], 'v' => $this->version($app), 'assets' => '/restaurant', 'demo' => false])
             ->header('Cache-Control', 'no-cache');
     }
 

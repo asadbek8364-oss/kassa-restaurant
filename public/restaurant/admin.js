@@ -89,7 +89,7 @@
     A.data.dashboard = d;
     const s = d.sync;
     renderBanner(s);
-    actions(html`<a class="btn" href="/waiter">Официант</a><a class="btn" href="/kitchen">Кухня</a>`);
+    actions(html`<a class="btn" href="${R.urls.waiter}">Официант</a><a class="btn" href="${R.urls.kitchen}">Кухня</a>`);
     view(html`
       <div class="stats">
         <div class="stat"><div class="k">Выручка сегодня</div><div class="v">${R.money(d.today.revenue)} <small>сум</small></div></div>
@@ -117,7 +117,7 @@
       banner.hidden = false;
       banner.className = 'banner' + (s.last && s.last.status === 'failed' ? ' bad' : '');
       R.set(banner, html`<span class="grow">Есть неотправленные данные: ${s.pending_total} ${R.plural(s.pending_total, 'запись', 'записи', 'записей')}.
-        ${s.last ? (s.last.status === 'failed' ? 'Последняя синхронизация не удалась: ' + (s.last.error || '') : 'Последняя синхронизация: ' + R.dateTime(s.last.finished_at)) : 'Синхронизации ещё не было.'}
+        ${s.last ? (s.last.status === 'failed' ? 'Последняя синхронизация не удалась: ' + String(s.last.error || 'ошибка').replace(/[.\s]*$/, '.') : 'Последняя синхронизация: ' + R.dateTime(s.last.finished_at) + '.') : 'Синхронизации ещё не было.'}
         Повтор — автоматически при следующем запуске.</span>
         <button class="btn btn-sm" data-act="syncNow">Синхронизировать сейчас</button>`);
     } else {
@@ -206,7 +206,7 @@
     if (!d) return;
     A.data.staff = d.staff;
     actions(html`<button class="btn btn-primary" data-act="editStaff">+ Сотрудник</button>`);
-    const home = { owner: '/admin', admin: '/admin', waiter: '/waiter', cook: '/kitchen', seller: '/kassa/' };
+    const home = { owner: '/admin', admin: '/admin', waiter: '/waiter', cook: '/kitchen', seller: '/kassa/' }; // адрес приложения роли (подпись)
     view(html`<section class="card"><div class="card-h"><h2>Команда</h2><span class="sub">Вход по PIN: роль определяет, какое приложение откроется</span></div>
       <div class="list">${d.staff.map((e) => html`<div class="list-row${e.active ? '' : ' off'}">
         <span class="avatar sm ${e.role}">${R.initials(e.name)}</span>
@@ -292,7 +292,8 @@
     view(html`<section class="card" style="max-width:720px"><div class="card-h"><h2>Склад продуктов</h2></div>
       <p>Склад, приход от поставщиков, инвентаризация и прогнозы остатков ведутся в приложении «Касса и склад» — с тем же PIN.</p>
       <p class="sub">Оплаченные заказы ресторана попадают в продажи кассы: их видно в отчётах и журнале кассы. Приход, инвентаризации и остатки уходят на онлайн-сервер при синхронизации.</p>
-      <a class="btn btn-primary btn-lg" href="/kassa/">Открыть «Кассу и склад»</a></section>`);
+      <a class="btn btn-primary btn-lg" href="${R.urls.kassa}"${raw(R.demo ? ' target="_blank" rel="noopener"' : '')}>Открыть «Кассу и склад»</a>
+      ${R.demo ? html`<p class="sub" style="margin-top:12px">В демо-версии «Касса и склад» — отдельная демонстрация с магазином аксессуаров.</p>` : ''}</section>`);
   }
 
   // ---------------------------------------------------------------- Настройки
@@ -323,6 +324,7 @@
             <div class="row2"><div class="field"><label for="p-host">IP-адрес принтера</label><input class="input mono" id="p-host" name="printer_host" value="${st.printer_host || ''}" placeholder="192.168.1.50" inputmode="decimal"></div>
               <div class="field"><label for="p-port">Порт</label><input class="input mono" id="p-port" name="printer_port" type="number" min="1" max="65535" value="${st.printer_port || 9100}"></div></div>
           </div>
+          ${R.demo ? html`<p class="pill info" style="margin-bottom:12px">Демо: принтер виртуальный — напечатанные чеки видны в лаунчере, раздел «Принтер кухни»</p>` : ''}
           <div data-printer="browser"${raw(st.printer_mode === 'browser' ? '' : ' hidden')}><p class="sub">Чеки печатает экран кухни (/kitchen) через окно печати браузера. Чтобы печать шла без диалога, запустите на кухонном компьютере Chrome с флагом <code>--kiosk-printing</code>.</p></div>
           <div class="row2"><div class="field"><label for="p-cp">Кодовая страница кириллицы</label><select class="select" id="p-cp" name="printer_codepage">${d.codepages.map((c) => html`<option value="${c}"${raw(st.printer_codepage === c ? ' selected' : '')}>${c === 'cp866' ? 'CP866 (ESC t 17)' : 'Windows-1251 (ESC t 46)'}</option>`)}</select></div>
             <div class="field"><label for="p-w">Символов в строке</label><select class="select" id="p-w" name="printer_width">${d.widths.map((w) => html`<option value="${w}"${raw(st.printer_width === w ? ' selected' : '')}>${w}${w === 48 ? ' — лента 80 мм' : w === 32 ? ' — лента 58 мм' : ''}</option>`)}</select></div></div>
@@ -355,6 +357,7 @@
         ${logList}</section>`;
     }
     return html`<section class="card" style="grid-column:1/-1"><div class="card-h"><h2>Сервер и синхронизация</h2><span class="mode-badge local">DEPLOY_MODE=local</span></div>
+      ${R.demo ? html`<p class="pill info">Демо: онлайн-сервер имитируется — «Проверить связь» и «Синхронизировать сейчас» работают без сети</p>` : ''}
       <p>Это <b>локальный сервер ресторана</b>: официанты, кухня и печать работают в локальной сети без интернета. Раз в день (в ${sy.schedule}, ${sy.timezone}) он отправляет на онлайн-сервер завершённые заказы, продажи и движения склада и получает меню, цены, столики, сотрудников и настройки.</p>
       ${!sy.configured ? html`<p class="pill">Синхронизация не настроена — ресторан работает автономно</p>`
         : sy.pending_total ? html`<p class="pill ${sy.attention ? 'bad' : 'warn'}">Ждут отправки: заказы ${sy.pending.orders}, продажи ${sy.pending.sales}, склад ${sy.pending.stock}, справочники ${sy.pending.menu}</p>` : html`<p class="pill ok">Всё отправлено</p>`}
@@ -523,7 +526,7 @@
     },
     openApps() {
       R.modal(html`<h2>Приложения ресторана</h2><p class="sub">Каждое ставится на устройство отдельно: откройте адрес и выберите «Установить» или «На экран Домой».</p>
-        <div class="list">${[['/waiter', 'Официант', 'планшет или телефон официанта'], ['/kitchen', 'Кухня', 'монитор или планшет на кухне'], ['/admin', 'Админка', 'этот экран'], ['/kassa/', 'Касса и склад', 'склад, приход, инвентаризация, прогнозы']].map(([u, n, s]) => html`<a class="list-row" href="${u}" style="text-decoration:none;color:inherit"><div class="grow"><div class="t">${n}</div><div class="s">${location.origin}${u} · ${s}</div></div></a>`)}</div>`);
+        <div class="list">${[['waiter', 'Официант', 'планшет или телефон официанта'], ['kitchen', 'Кухня', 'монитор или планшет на кухне'], ['admin', 'Админка', 'этот экран'], ['kassa', 'Касса и склад', 'склад, приход, инвентаризация, прогнозы']].map(([a, n, s]) => html`<a class="list-row" href="${R.urls[a]}" style="text-decoration:none;color:inherit"><div class="grow"><div class="t">${n}</div><div class="s">${new URL(R.urls[a], location.href).href} · ${s}</div></div></a>`)}</div>`);
     },
     async switchStore(el) {
       if (el.value === 'new') {

@@ -2,6 +2,9 @@
  * Общее для приложений ресторана (/admin, /waiter, /kitchen): запросы к /api/restaurant с токеном,
  * вход по PIN (роль определяет приложение), диалоги, уведомления, чек (экран и печать из браузера),
  * звук (WebAudio), service worker. Без библиотек и внешних файлов — работает в локальной сети без интернета.
+ *
+ * Демо-версия (demo/): если перед этим файлом подключён эмулятор сервера (window.RESTAURANT_DEMO),
+ * запросы идут в него, а не на сервер, адреса приложений и ресурсов — относительные.
  */
 'use strict';
 (function () {
@@ -10,6 +13,9 @@
   const API = '/api/restaurant';
   const KEY = 'restoran:';
   R.me = null;
+  R.demo = window.RESTAURANT_DEMO || null;
+  R.urls = Object.assign({ admin: '/admin', waiter: '/waiter', kitchen: '/kitchen', kassa: '/kassa/' }, R.demo ? R.demo.urls : {});
+  R.assets = R.demo ? R.demo.assets : '/restaurant/';
 
   // ---------------------------------------------------------------- хранилище устройства
   R.local = {
@@ -74,36 +80,51 @@
   R.onNetwork = null;
   const setOnline = (ok) => { if (R.online !== ok) { R.online = ok; if (R.onNetwork) R.onNetwork(ok); } };
 
-  R.api = async (method, path, body, opts = {}) => {
+  // запрос к серверу (или к эмулятору демо-версии) → { status, data }
+  async function send(method, url, body, token, timeout) {
+    if (R.demo) return R.demo.request(method, url, body, token);
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), opts.timeout || 15000);
+    const timer = setTimeout(() => ctrl.abort(), timeout || 15000);
     const headers = { Accept: 'application/json' };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
-    const token = opts.token !== undefined ? opts.token : R.token();
     if (token) headers.Authorization = 'Bearer ' + token;
-    let res;
     try {
-      res = await fetch((opts.base || API) + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined, signal: ctrl.signal, cache: 'no-store' });
-    } catch (e) {
-      setOnline(false);
-      throw new ApiError('Нет связи с сервером ресторана — проверьте Wi-Fi', 0);
+      const res = await fetch(url, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined, signal: ctrl.signal, cache: 'no-store' });
+      let data = null;
+      try { data = await res.json(); } catch (e) { /* пустой ответ */ }
+      return { status: res.status, data };
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  R.api = async (method, path, body, opts = {}) => {
+    const token = opts.token !== undefined ? opts.token : R.token();
+    let status;
+    let data;
+    try {
+      ({ status, data } = await send(method, (opts.base || API) + path, body, token, opts.timeout));
+    } catch (e) {
+      setOnline(false);
+      throw new ApiError('Нет связи с сервером ресторана — проверьте Wi-Fi', 0);
+    }
     setOnline(true);
-    let data = null;
-    try { data = await res.json(); } catch (e) { /* пустой ответ */ }
-    if (res.status === 401 && !opts.public) {
+    if (status === 401 && !opts.public) {
       R.local.del(tokenKey());
       R.showLogin('Войдите заново');
       throw new ApiError((data && data.message) || 'Войдите заново', 401, data);
     }
-    if (!res.ok) {
+    if (status >= 400) {
       const first = data && data.errors ? Object.values(data.errors).flat()[0] : null;
-      throw new ApiError(first || (data && data.message) || 'Ошибка сервера (' + res.status + ')', res.status, data);
+      throw new ApiError(first || (data && data.message) || 'Ошибка сервера (' + status + ')', status, data);
     }
     return data;
   };
+  // демо: данные общие для вкладок — изменение в соседней вкладке сразу обновляет экран (R.live задаёт приложение)
+  R.live = null;
+  if (R.demo) {
+    window.addEventListener('storage', (ev) => { if (ev.key === R.demo.key && R.live && R.me) R.live(); });
+  }
 
   // ---------------------------------------------------------------- уведомления и диалоги
   let toastTimer = null;
@@ -252,7 +273,7 @@
 
   // ---------------------------------------------------------------- PWA
   R.registerSW = () => {
-    if ('serviceWorker' in navigator && window.isSecureContext) {
+    if (!R.demo && 'serviceWorker' in navigator && window.isSecureContext) {
       navigator.serviceWorker.register('/' + R.app + '/sw.js', { scope: '/' + R.app }).catch(() => { /* без офлайн-оболочки */ });
     }
   };
@@ -297,7 +318,7 @@
     const staff = o.employees || [];
     const picked = staff.find((e) => e.id === L.pick);
     R.set(box, R.html`<div class="login-box">
-      <div class="login-head"><img src="/restaurant/icons/${R.app}.svg" alt=""><h1>${APP_TITLE[R.app]}</h1>
+      <div class="login-head"><img src="${R.assets}icons/${R.app}.svg" alt=""><h1>${APP_TITLE[R.app]}</h1>
         <p class="sub">${o.store.name}${o.mode === 'online' ? ' · онлайн-сервер' : ''}</p></div>
       ${o.stores.length > 1 ? R.html`<div class="field" style="max-width:360px;margin:0 auto 14px"><label for="login-store">Ресторан</label>
         <select class="select" id="login-store" data-change="loginStore">${o.stores.map((s) => R.html`<option value="${s.id}"${R.raw(s.id === o.store.id ? ' selected' : '')}>${s.name}</option>`)}</select></div>` : ''}
@@ -310,7 +331,7 @@
         <button class="btn btn-primary btn-block btn-lg" style="margin-top:12px" data-act="pinSubmit"${R.raw(L.pin.length < 4 ? ' disabled' : '')}>Войти</button>
         <div class="pin-error">${L.error}</div></div>` : (L.error ? R.html`<div class="pin-error" style="text-align:center">${L.error}</div>` : '')}
       ${o.demo_hint ? R.html`<div class="demo-hint">${o.demo_hint}</div>` : ''}
-      <div class="login-foot">Приложения ресторана: <a href="/admin">админка</a> · <a href="/waiter">официант</a> · <a href="/kitchen">кухня</a></div>
+      <div class="login-foot">Приложения ресторана: <a href="${R.urls.admin}">админка</a> · <a href="${R.urls.waiter}">официант</a> · <a href="${R.urls.kitchen}">кухня</a>${R.demo ? R.html` · <a href="${R.demo.urls.launcher}" target="_top">лаунчер демо-версии</a>` : ''}</div>
     </div>`);
   }
 
@@ -318,11 +339,11 @@
     if (R.app !== 'admin') {
       R.set(box, R.html`<div class="login-box card"><div class="login-head"><h1>${APP_TITLE[R.app]}</h1>
         <p class="sub">Ресторан ещё не настроен. Откройте админку и создайте ресторан и администратора.</p></div>
-        <div class="form-actions" style="justify-content:center"><a class="btn btn-primary" href="/admin">Открыть админку</a></div></div>`);
+        <div class="form-actions" style="justify-content:center"><a class="btn btn-primary" href="${R.urls.admin}">Открыть админку</a></div></div>`);
       return;
     }
     R.set(box, R.html`<div class="login-box card" style="max-width:520px">
-      <div class="login-head"><img src="/restaurant/icons/admin.svg" alt=""><h1>Первая настройка</h1>
+      <div class="login-head"><img src="${R.assets}icons/admin.svg" alt=""><h1>Первая настройка</h1>
         <p class="sub">Создайте ресторан и владельца. Владелец входит по PIN и добавляет администраторов, официантов и поваров.</p></div>
       ${o.setup_ready ? R.html`<form data-submit="setup">
         ${o.setup_code_required ? R.html`<div class="field"><label for="su-code">Код установки</label><input class="input" id="su-code" name="setup_code" required autocomplete="off">

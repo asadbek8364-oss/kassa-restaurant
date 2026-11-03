@@ -400,7 +400,7 @@ body.app-kitchen {
 .kitems { list-style: none; margin: 10px 0 0; padding: 0; }
 .kitem { display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left; padding: 8px 10px; margin-top: 6px; border-radius: 12px; border: 2px solid transparent; background: var(--surface-2); color: var(--text); font-size: 24px; font-weight: 800; line-height: 1.2; }
 .kitem .q { flex: none; min-width: 52px; }
-.kitem .nm { flex: 1; min-width: 0; }
+.kitem .nm { flex: 1; min-width: 0; overflow-wrap: break-word; }
 .kitem .cm { display: block; margin-top: 4px; font-size: 19px; font-weight: 900; color: #1b1200; background: var(--warn); border-radius: 8px; padding: 2px 8px; }
 .kitem .ks { flex: none; font-size: 14px; font-weight: 800; padding: 4px 8px; border-radius: 8px; text-transform: uppercase; }
 .kitem.cooking { border-color: var(--warn); }
@@ -423,7 +423,39 @@ body.app-kitchen {
 .stop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; max-height: 60vh; overflow: auto; }
 .stop-grid button { min-height: 60px; border-radius: 12px; border: 2px solid var(--line); background: var(--surface-2); color: var(--text); font-weight: 700; font-size: 17px; text-align: left; padding: 8px 12px; }
 .stop-grid button.on { border-color: var(--bad); background: var(--bad-soft); color: #ffb4b4; }
-@media (max-width: 1100px) { body.app-kitchen { font-size: 18px; } .kitem { font-size: 21px; } .kcard-no { font-size: 26px; } .kds-actions .kds-btn { padding: 0 10px; font-size: 15px; } }
+@media (max-width: 1100px) {
+  body.app-kitchen { font-size: 18px; }
+  .kitem { font-size: 21px; }
+  .kcard-no { font-size: 26px; }
+  .kds-top { flex-wrap: wrap; row-gap: 8px; }
+  .kds-brand strong { font-size: 19px; }
+  .kds-clock { font-size: 24px; }
+  .kds-actions .kds-btn { min-height: 44px; padding: 0 10px; font-size: 15px; }
+  .kcard-table { font-size: 22px; }
+  .ktimer { font-size: 22px; }
+  .kitem .ks { display: none; } /* статус позиции — цветом рамки: жёлтая — готовится, зелёная — готово */
+  .kcard-a { flex-wrap: wrap; }
+  .kcard-a .kds-btn { min-height: 56px; font-size: 18px; padding: 0 12px; }
+}
+/* узкий экран кухни (планшет, окно рядом с приложением официанта): статус позиции — цветом рамки */
+@media (max-width: 1000px) {
+  .kds-board { gap: 8px; padding: 8px; }
+  .kds-col-h { font-size: 19px; padding: 10px 12px; }
+  .kds-col-h b { font-size: 22px; }
+  .kds-cards { padding: 8px; gap: 8px; }
+  .kcard { padding: 10px; }
+  .kcard-h { flex-wrap: wrap; gap: 6px; }
+  .kcard-no { font-size: 22px; }
+  .kcard-table { font-size: 18px; padding: 2px 10px; }
+  .ktimer { font-size: 18px; padding: 2px 8px; }
+  .kcard-meta { font-size: 15px; }
+  .kitem { font-size: 18px; padding: 6px 8px; gap: 6px; }
+  .kitem .q { min-width: 36px; }
+  .kitem .cm { font-size: 15px; }
+  .kcomment { font-size: 16px; }
+  .kcard-a { flex-wrap: wrap; }
+  .kcard-a .kds-btn { min-height: 52px; font-size: 17px; }
+}
 @media (max-width: 760px) {
   body.app-kitchen { overflow: auto; }
   .kds-shell { height: auto; min-height: 100vh; }

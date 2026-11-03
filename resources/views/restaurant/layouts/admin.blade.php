@@ -8,7 +8,7 @@
 <div class="admin-shell" id="shell" hidden>
   <aside class="admin-side" aria-label="Разделы админки">
     <div class="brand">
-      <img src="/restaurant/icons/admin.svg" alt="" width="36" height="36">
+      <img src="{{ $assets ?? '/restaurant' }}/icons/admin.svg" alt="" width="36" height="36">
       <div class="brand-text"><strong id="brand-name">Ресторан</strong><span id="brand-mode"></span></div>
     </div>
     <nav class="side-nav" id="side-nav"></nav>
