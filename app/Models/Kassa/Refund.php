@@ -2,11 +2,14 @@
 
 namespace App\Models\Kassa;
 
+use App\Models\Kassa\Concerns\BelongsToStore;
 use Illuminate\Database\Eloquent\Model;
 
 /** Возврат по чеку (таблица kassa_returns). */
 class Refund extends Model
 {
+    use BelongsToStore;
+
     public const REASONS = ['Брак', 'Не подошёл', 'Передумал', 'Другое'];
 
     protected $table = 'kassa_returns';

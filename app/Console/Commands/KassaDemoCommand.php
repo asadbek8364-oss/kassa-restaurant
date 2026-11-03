@@ -9,7 +9,7 @@ class KassaDemoCommand extends Command
 {
     protected $signature = 'kassa:demo {--force : Не спрашивать подтверждение}';
 
-    protected $description = '«Касса и склад»: заменить все данные кассы демо-магазином (только при KASSA_DEMO_ENABLED=true вне production)';
+    protected $description = '«Касса и склад»: заменить все данные кассы двумя демо-магазинами (только при KASSA_DEMO_ENABLED=true вне production)';
 
     /** На рабочем сервере и без KASSA_DEMO_ENABLED=true команды просто нет в artisan. */
     public function isEnabled(): bool
@@ -24,12 +24,12 @@ class KassaDemoCommand extends Command
 
             return self::FAILURE;
         }
-        if (! $this->option('force') && ! $this->confirm('Все товары, чеки, документы и сотрудники кассы будут заменены демо-данными. Продолжить?')) {
+        if (! $this->option('force') && ! $this->confirm('Все магазины, товары, чеки, документы и сотрудники кассы будут заменены демо-данными. Продолжить?')) {
             return self::FAILURE;
         }
 
         $demo->load();
-        $this->info('Демо-магазин загружен. PIN владельца: 1111, продавцов: 2222, 3333, 4444.');
+        $this->info('Демо загружено: два магазина. PIN владельца: 1111, продавцов: 2222, 3333, 4444, во втором магазине — 5555.');
 
         return self::SUCCESS;
     }

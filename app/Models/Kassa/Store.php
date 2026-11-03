@@ -2,13 +2,18 @@
 
 namespace App\Models\Kassa;
 
+use App\Support\Kassa\StoreContext;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * Единственная строка с настройками магазина и счётчиками номеров документов.
+ * Магазин: название, адрес и счётчики номеров документов (у каждого магазина своя нумерация).
+ * Товары, документы и продавцы принадлежат магазину; владельцы общие для всех магазинов.
  */
 class Store extends Model
 {
+    /** Сколько магазинов может создать владелец. */
+    public const MAX_STORES = 20;
+
     protected $table = 'kassa_stores';
 
     protected $fillable = ['name', 'address', 'is_demo', 'next_sale_no', 'next_return_no', 'next_income_no', 'next_audit_no'];
@@ -29,25 +34,23 @@ class Store extends Model
         'next_audit_no' => 'integer',
     ];
 
+    /** Магазин текущего запроса (см. StoreContext). */
     public static function current(): self
     {
-        return static::query()->orderBy('id')->first()
-            ?? static::create(['name' => 'Мой магазин']);
+        return app(StoreContext::class)->store();
     }
 
     /**
-     * Строка магазина под блокировкой — операции с остатками и нумерация документов идут строго по очереди.
+     * Строка текущего магазина под блокировкой — операции с остатками и нумерация документов идут строго по очереди.
      * Первая команда транзакции — запись: в SQLite она сразу занимает блокировку записи (иначе две кассы
      * могли бы прочитать одно и то же и получить ошибку при записи), в MySQL/PostgreSQL блокирует строку.
      */
     public static function locked(): self
     {
-        $touched = static::query()->orderBy('id')->limit(1)->update(['updated_at' => now()]);
-        if ($touched === 0) {
-            static::create(['name' => 'Мой магазин']);
-        }
+        $id = static::current()->id;
+        static::query()->whereKey($id)->update(['updated_at' => now()]);
 
-        return static::query()->orderBy('id')->lockForUpdate()->firstOrFail();
+        return static::query()->whereKey($id)->lockForUpdate()->firstOrFail();
     }
 
     /** Выдаёт следующий номер документа: sale | return | income | audit. */

@@ -2,10 +2,13 @@
 
 namespace App\Models\Kassa;
 
+use App\Models\Kassa\Concerns\BelongsToStore;
 use Illuminate\Database\Eloquent\Model;
 
 class IncomeItem extends Model
 {
+    use BelongsToStore;
+
     public $timestamps = false;
 
     protected $table = 'kassa_income_items';

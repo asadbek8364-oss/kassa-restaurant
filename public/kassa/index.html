@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>Касса и склад</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="Касса и склад для магазина аксессуаров для телефонов: продажи, приход, возвраты, инвентаризация и отчёты.">
+<meta name="description" content="Касса и склад для магазинов аксессуаров для телефонов: продажи (в том числе без связи), приход, возвраты, инвентаризация, отчёты и прогнозы.">
 <meta name="theme-color" content="#eef1f6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0a0f1c" media="(prefers-color-scheme: dark)">
 <meta name="mobile-web-app-capable" content="yes">
@@ -25,6 +25,7 @@
     <div class="title-wrap"><div class="eyebrow" id="eyebrow"></div><h1 id="title">Касса и склад</h1></div>
     <button class="who" id="who" data-act="switchUser" aria-label="Сменить сотрудника на кассе"></button>
   </header>
+  <button class="net" id="net" data-act="openQueue" aria-live="polite" hidden></button>
   <main class="view" id="view"></main>
 </div>
 

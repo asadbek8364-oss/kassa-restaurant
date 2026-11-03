@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Support\Kassa\StoreContext;
 use App\Support\ProductionSecurityBaseline;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -17,7 +18,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // «Касса и склад»: магазин текущего запроса (свой экземпляр на каждый запрос).
+        $this->app->scoped(StoreContext::class);
     }
 
     /**

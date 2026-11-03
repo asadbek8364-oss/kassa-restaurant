@@ -14,6 +14,7 @@ use App\Models\Kassa\Sale;
 use App\Models\Kassa\SaleItem;
 use App\Models\Kassa\Store;
 use App\Support\Kassa\Ean13;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -26,6 +27,9 @@ use Illuminate\Validation\ValidationException;
  */
 class KassaService
 {
+    /** Офлайн-чек старше этого срока считается пробитым с неверными часами. */
+    public const OFFLINE_MAX_AGE_DAYS = 30;
+
     /**
      * Продажа: проверяет остатки, считает сумму по розничным ценам из базы, сдачу, списывает товар.
      *
@@ -103,6 +107,110 @@ class KassaService
 
             return [$existing, collect(), true];
         }
+    }
+
+    /**
+     * Чек, пробитый на устройстве без связи и пришедший позже из очереди.
+     *
+     * Правило конфликтов по остаткам: такой чек — свершившийся факт (товар у покупателя, деньги в кассе),
+     * поэтому сервер принимает его всегда и не отклоняет из-за остатков:
+     *  - товар списывается, сколько есть, но остаток не уходит ниже нуля; недостающее количество
+     *    записывается в позицию (shortage) — это расхождение, его закрывает приход или инвентаризация;
+     *  - цены, себестоимость и итог — по серверу, как у обычного чека; сумма с устройства хранится
+     *    в client_total, чтобы расхождение было видно;
+     *  - товар, удалённый из каталога, пока чек ждал отправки, записывается по названию и цене с устройства,
+     *    без списания (вся строка — shortage);
+     *  - время продажи — по часам устройства, если оно не в будущем и не старше OFFLINE_MAX_AGE_DAYS дней;
+     *  - номер чека выдаётся при синхронизации; повтор того же client_uuid возвращает уже сохранённый чек.
+     *
+     * @param  array{client_uuid:string, sold_at:?string, payment:string, customer:?string, received:?int, client_total:?int, items:array<int, array{product_id:int, qty:int, name:?string, price:?int}>}  $data
+     * @return array{0: Sale, 1: Collection<int, Product>, 2: bool} [чек, изменённые товары, это повтор]
+     */
+    public function syncOffline(Employee $by, array $data): array
+    {
+        $uuid = $data['client_uuid'];
+        if ($existing = Sale::withoutGlobalScopes()->where('client_uuid', $uuid)->first()) {
+            return [$existing, collect(), true];
+        }
+
+        $lines = [];
+        foreach ($data['items'] as $l) {
+            $id = (int) $l['product_id'];
+            $lines[$id] ??= ['qty' => 0, 'name' => trim((string) ($l['name'] ?? '')), 'price' => (int) ($l['price'] ?? 0)];
+            $lines[$id]['qty'] += (int) $l['qty'];
+        }
+        $soldAt = $this->offlineTime($data['sold_at'] ?? null);
+
+        try {
+            return DB::transaction(function () use ($by, $data, $lines, $soldAt, $uuid) {
+                $store = Store::locked();
+                $products = Product::whereIn('id', array_keys($lines))->lockForUpdate()->get()->keyBy('id');
+
+                $rows = [];
+                $total = $cost = 0;
+                foreach ($lines as $id => $l) {
+                    $p = $products->get($id);
+                    $row = $p
+                        ? ['product_id' => $p->id, 'name' => $p->name, 'price' => $p->sell_price, 'cost' => $p->buy_price, 'shortage' => max(0, $l['qty'] - $p->stock)]
+                        : ['product_id' => null, 'name' => mb_substr($l['name'] !== '' ? $l['name'] : 'Удалённый товар', 0, 80), 'price' => $l['price'], 'cost' => 0, 'shortage' => $l['qty']];
+                    $rows[] = $row + ['qty' => $l['qty']];
+                    $total += $l['qty'] * $row['price'];
+                    $cost += $l['qty'] * $row['cost'];
+                }
+
+                $received = null;
+                $change = 0;
+                if ($data['payment'] === 'cash') {
+                    $received = (int) ($data['received'] ?? 0) ?: $total;
+                    $change = max(0, $received - $total);
+                }
+
+                $sale = Sale::create([
+                    'number' => $store->takeNumber('sale'),
+                    'employee_id' => $by->id,
+                    'customer' => isset($data['customer']) && trim($data['customer']) !== '' ? trim($data['customer']) : null,
+                    'payment' => $data['payment'],
+                    'total' => $total,
+                    'cost_total' => $cost,
+                    'received' => $received,
+                    'change_amount' => $change,
+                    'client_uuid' => $uuid,
+                    'client_total' => isset($data['client_total']) ? (int) $data['client_total'] : null,
+                    'synced_at' => now(),
+                    'created_at' => $soldAt,
+                ]);
+
+                foreach ($rows as $row) {
+                    SaleItem::create(['sale_id' => $sale->id] + $row);
+                    if ($row['product_id'] && ($p = $products->get($row['product_id']))) {
+                        $p->stock -= $row['qty'] - $row['shortage'];
+                        $p->save();
+                    }
+                }
+
+                return [$sale, $products->values(), false];
+            });
+        } catch (UniqueConstraintViolationException $e) {
+            $existing = Sale::withoutGlobalScopes()->where('client_uuid', $uuid)->first();
+            if (! $existing) {
+                throw $e;
+            }
+
+            return [$existing, collect(), true];
+        }
+    }
+
+    /** Время офлайн-продажи по часам устройства; явно неверное (будущее, старше месяца) заменяется временем сервера. */
+    private function offlineTime(?string $value): CarbonImmutable
+    {
+        $now = CarbonImmutable::now(config('app.timezone'));
+        try {
+            $t = $value ? CarbonImmutable::parse($value)->setTimezone(config('app.timezone')) : $now;
+        } catch (\Throwable) {
+            return $now;
+        }
+
+        return $t > $now || $t < $now->subDays(self::OFFLINE_MAX_AGE_DAYS) ? $now : $t;
     }
 
     /**

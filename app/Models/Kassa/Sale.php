@@ -2,15 +2,18 @@
 
 namespace App\Models\Kassa;
 
+use App\Models\Kassa\Concerns\BelongsToStore;
 use Illuminate\Database\Eloquent\Model;
 
 class Sale extends Model
 {
+    use BelongsToStore;
+
     public const PAYMENTS = ['cash', 'card', 'qr'];
 
     protected $table = 'kassa_sales';
 
-    protected $fillable = ['number', 'employee_id', 'customer', 'payment', 'total', 'cost_total', 'received', 'change_amount', 'client_uuid', 'created_at', 'updated_at'];
+    protected $fillable = ['number', 'employee_id', 'customer', 'payment', 'total', 'cost_total', 'received', 'change_amount', 'client_uuid', 'synced_at', 'client_total', 'created_at', 'updated_at'];
 
     protected $casts = [
         'number' => 'integer',
@@ -18,7 +21,15 @@ class Sale extends Model
         'cost_total' => 'integer',
         'received' => 'integer',
         'change_amount' => 'integer',
+        'client_total' => 'integer',
+        'synced_at' => 'datetime',
     ];
+
+    /** Чек пробит без связи и отправлен на сервер позже. */
+    public function isOffline(): bool
+    {
+        return $this->synced_at !== null;
+    }
 
     public function items()
     {

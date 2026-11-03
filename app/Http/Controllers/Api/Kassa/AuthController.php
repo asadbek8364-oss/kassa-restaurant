@@ -8,6 +8,7 @@ use App\Models\Kassa\Token;
 use App\Rules\KassaPin;
 use App\Services\Kassa\KassaDemoService;
 use App\Support\Kassa\Presenter;
+use App\Support\Kassa\StoreContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,21 +23,34 @@ class AuthController extends KassaController
     /** После 5 неверных PIN подряд вход сотрудника закрыт на 15 минут. */
     private const PIN_LOCK_SECONDS = 900;
 
-    /** Экран входа: название магазина, список сотрудников, нужна ли первая настройка. */
-    public function options(): JsonResponse
+    /**
+     * Экран входа: магазины, сотрудники выбранного магазина (его продавцы и владельцы), нужна ли первая настройка.
+     * Телефон помнит свой магазин и передаёт его в ?store_id; без него показывается первый магазин.
+     */
+    public function options(Request $request, StoreContext $context): JsonResponse
     {
-        $store = Store::current();
+        $store = $this->storeFor($request->query('store_id'));
+        $context->set($store);
 
         return response()->json([
             'store' => Presenter::store($store),
-            'needs_setup' => ! Employee::exists(),
+            'stores' => Store::orderBy('id')->get(['id', 'name'])->map(fn ($s) => ['id' => $s->id, 'name' => $s->name])->all(),
+            'needs_setup' => ! Employee::withoutGlobalScopes()->exists(),
             'employees' => Employee::where('active', true)->orderByRaw("CASE WHEN role = 'owner' THEN 0 ELSE 1 END")->orderBy('name')
                 ->get(['id', 'name', 'role'])->map(fn ($e) => ['id' => $e->id, 'name' => $e->name, 'role' => $e->role])->all(),
-            'demo_hint' => $store->is_demo && KassaDemoService::allowed() ? 'Демо: PIN владельца 1111, продавцов 2222, 3333, 4444' : null,
+            'demo_hint' => $store->is_demo && KassaDemoService::allowed() ? KassaDemoService::hint() : null,
             'demo_available' => KassaDemoService::allowed(),
             'setup_code_required' => $this->setupState()['required'],
             'setup_ready' => $this->setupState()['ready'],
         ]);
+    }
+
+    /** Магазин по id из запроса или первый (при пустой базе он создаётся). */
+    private function storeFor(mixed $id): Store
+    {
+        $found = is_numeric($id) ? Store::find((int) $id) : null;
+
+        return $found ?? Store::query()->orderBy('id')->first() ?? Store::current();
     }
 
     /**
@@ -54,7 +68,7 @@ class AuthController extends KassaController
     /** Первая настройка: доступна, пока нет ни одного сотрудника. */
     public function setup(Request $request, KassaDemoService $demo): JsonResponse
     {
-        if (Employee::exists()) {
+        if (Employee::withoutGlobalScopes()->exists()) {
             return response()->json(['message' => 'Касса уже настроена — войдите по PIN'], 409);
         }
 
@@ -71,7 +85,7 @@ class AuthController extends KassaController
                 return response()->json(['message' => 'Демо-данные на этом сервере отключены'], 404);
             }
             $demo->load();
-            $owner = Employee::where('role', 'owner')->firstOrFail();
+            $owner = Employee::withoutGlobalScopes()->where('role', 'owner')->orderBy('id')->firstOrFail();
         } else {
             $data = $this->check($request, [
                 'store_name' => 'required|string|max:60',
@@ -85,14 +99,18 @@ class AuthController extends KassaController
             });
         }
 
-        return $this->session($owner, 201);
+        return $this->session($owner, Store::query()->orderBy('id')->firstOrFail(), 201);
     }
 
+    /**
+     * Вход по PIN. Продавец попадает в свой магазин, владелец — в магазин телефона (store_id) или в первый.
+     */
     public function login(Request $request): JsonResponse
     {
         $data = $this->check($request, [
             'employee_id' => 'required|integer',
             'pin' => 'required|digits_between:4,6',
+            'store_id' => 'nullable|integer',
         ]);
 
         $key = 'kassa-pin:'.$data['employee_id'];
@@ -100,14 +118,25 @@ class AuthController extends KassaController
             return response()->json(['message' => 'Слишком много попыток. Попробуйте через '.RateLimiter::availableIn($key).' сек.'], 429);
         }
 
-        $employee = Employee::where('active', true)->find($data['employee_id']);
+        $employee = Employee::withoutGlobalScopes()->where('active', true)->find($data['employee_id']);
         if (! $employee || ! Hash::check($data['pin'], $employee->pin)) {
             RateLimiter::hit($key, self::PIN_LOCK_SECONDS);
             throw ValidationException::withMessages(['pin' => 'Неверный PIN']);
         }
         RateLimiter::clear($key);
 
-        return $this->session($employee);
+        $store = $employee->isOwner() ? $this->storeFor($data['store_id'] ?? null) : Store::find($employee->store_id);
+        if (! $store) {
+            throw ValidationException::withMessages(['employee_id' => 'Магазин сотрудника не найден — обратитесь к владельцу']);
+        }
+
+        return $this->session($employee, $store);
+    }
+
+    /** Проверка связи для офлайн-очереди: сервер доступен и вход ещё действует. */
+    public function ping(): JsonResponse
+    {
+        return response()->json(['ok' => true, 'store_id' => Store::current()->id, 'time' => now()->toIso8601String()]);
     }
 
     public function logout(Request $request): JsonResponse
@@ -117,12 +146,14 @@ class AuthController extends KassaController
         return response()->json(['ok' => true]);
     }
 
-    private function session(Employee $employee, int $status = 200): JsonResponse
+    private function session(Employee $employee, Store $store, int $status = 200): JsonResponse
     {
+        app(StoreContext::class)->set($store);
+
         return response()->json([
-            'token' => Token::issue($employee),
+            'token' => Token::issue($employee, $store),
             'employee' => Presenter::employee($employee),
-            'store' => Presenter::store(Store::current()),
+            'store' => Presenter::store($store),
         ], $status);
     }
 }

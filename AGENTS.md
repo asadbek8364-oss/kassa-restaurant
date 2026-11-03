@@ -75,7 +75,7 @@ php artisan crm:generate-reminders       # queue campaign reminder messages (dai
 php artisan scramble:cache               # warm Scramble OpenAPI cache
 php artisan scramble:clear               # invalidate Scramble OpenAPI cache
 php artisan seed:demo                    # regenerate full demo dataset (truncates demo tables; --force skips confirm)
-php artisan kassa:demo --force           # «Касса и склад» demo shop (PIN owner 1111, sellers 2222–4444); only with KASSA_DEMO_ENABLED=true and APP_ENV≠production, otherwise the command does not exist
+php artisan kassa:demo --force           # «Касса и склад» two demo shops (PIN owner 1111, sellers 2222–4444, branch 5555); only with KASSA_DEMO_ENABLED=true and APP_ENV≠production, otherwise the command does not exist
 php artisan db:seed --class=DemoSeeder --force # explicit full demo dataset (never use on production)
 
 # Formatting
@@ -94,7 +94,7 @@ Production must trigger `php artisan schedule:run` every minute for the schedule
 - **Services**: `app/Services/` — ~22 services: AuditLog, BatchService, CashierShiftService, DineOrderService, GoodsReceivingService, LoyaltyService, PaymentGatewayManager, PricingService, PriceListService, PurchaseOrderService, ReorderService, StockMutationService, StockTransferService, UnitConversionService, WhatsAppService, etc.
 - **Layouts**: `POSLayout.jsx` (POS), `DashboardLayout.jsx` (admin), `AuthenticatedLayout.jsx` (profile), `GuestLayout.jsx` (auth), `PublicLayout.jsx` (public dine-in)
 - **Routes**: `routes/web.php` (~50+ dashboard routes), `routes/api.php` (webhooks + REST API), `routes/auth.php` (Breeze)
-- **«Касса и склад»** (separate mobile shop app): static client in `public/kassa/`, API `/api/kassa` (PIN login → bearer token via `kassa.auth`, owner-only via `kassa.owner`), models `app/Models/Kassa`, logic `app/Services/Kassa` (all stock/money/report math server-side), tables `kassa_*`, tests `tests/Feature/Kassa`. First run: web setup wizard (store, owner, strong PIN via `App\Rules\KassaPin`; `KASSA_SETUP_CODE` required in production). No demo data unless `KASSA_DEMO_ENABLED=true` outside production. Docs and deploy steps: `docs/kassa-sklad.md`.
+- **«Касса и склад»** (separate mobile shop app): static client in `public/kassa/`, API `/api/kassa` (PIN login → bearer token via `kassa.auth`, owner-only via `kassa.owner`), models `app/Models/Kassa`, logic `app/Services/Kassa` (all stock/money/report/forecast math server-side), tables `kassa_*`, tests `tests/Feature/Kassa`. Multi-store: every data row has `store_id`, isolated by the `StoreScope` global scope (`BelongsToStore` trait) using `App\Support\Kassa\StoreContext`, set from the token's store in `kassa.auth`; owners are global (`store_id` NULL), sellers belong to one store. Offline sales queue on the device and sync via `POST /api/kassa/sales/sync` (idempotent by `client_uuid`; stock never below zero, shortage recorded — rule in `KassaService::syncOffline`). First run: web setup wizard (store, owner, strong PIN via `App\Rules\KassaPin`; `KASSA_SETUP_CODE` required in production). No demo data unless `KASSA_DEMO_ENABLED=true` outside production. Docs and deploy steps: `docs/kassa-sklad.md`.
 - **Inertia shared props**: `HandleInertiaRequests.php` — auth, permissions, notifications (low stock, receivables, payables aging), active shift, store profile, appVersion
 
 ## Middleware

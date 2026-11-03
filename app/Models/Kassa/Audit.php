@@ -2,11 +2,14 @@
 
 namespace App\Models\Kassa;
 
+use App\Models\Kassa\Concerns\BelongsToStore;
 use Illuminate\Database\Eloquent\Model;
 
 /** Инвентаризация: сверка фактических остатков с учётом. */
 class Audit extends Model
 {
+    use BelongsToStore;
+
     protected $table = 'kassa_audits';
 
     protected $fillable = ['number', 'employee_id', 'created_at', 'updated_at'];

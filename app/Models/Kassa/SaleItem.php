@@ -2,20 +2,24 @@
 
 namespace App\Models\Kassa;
 
+use App\Models\Kassa\Concerns\BelongsToStore;
 use Illuminate\Database\Eloquent\Model;
 
 class SaleItem extends Model
 {
+    use BelongsToStore;
+
     public $timestamps = false;
 
     protected $table = 'kassa_sale_items';
 
-    protected $fillable = ['sale_id', 'product_id', 'name', 'qty', 'price', 'cost'];
+    protected $fillable = ['sale_id', 'product_id', 'name', 'qty', 'price', 'cost', 'shortage'];
 
     protected $casts = [
         'qty' => 'integer',
         'price' => 'integer',
         'cost' => 'integer',
+        'shortage' => 'integer',
     ];
 
     public function sale()
