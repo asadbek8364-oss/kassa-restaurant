@@ -2,6 +2,9 @@
 
 namespace App\Providers;
 
+use App\Services\Restaurant\Printing\PrinterTransport;
+use App\Services\Restaurant\Printing\PrintQueue;
+use App\Services\Restaurant\Printing\TcpPrinterTransport;
 use App\Support\Kassa\StoreContext;
 use App\Support\ProductionSecurityBaseline;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -20,6 +23,10 @@ class AppServiceProvider extends ServiceProvider
     {
         // «Касса и склад»: магазин текущего запроса (свой экземпляр на каждый запрос).
         $this->app->scoped(StoreContext::class);
+
+        // Ресторан: сетевой принтер ESC/POS (в тестах подменяется FakePrinterTransport) и очередь печати.
+        $this->app->singleton(PrinterTransport::class, TcpPrinterTransport::class);
+        $this->app->scoped(PrintQueue::class);
     }
 
     /**
@@ -38,6 +45,8 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('kassa-setup', fn (Request $request) => Limit::perMinute(5)->by('kassa-setup|'.$request->ip()));
         RateLimiter::for('kassa-login', fn (Request $request) => Limit::perMinute(30)->by('kassa-login|'.$request->ip()));
         RateLimiter::for('kassa-api', fn (Request $request) => Limit::perMinute(300)->by('kassa-api|'.sha1((string) ($request->bearerToken() ?: $request->ip()))));
+        // Ресторан: запросы локального сервера к онлайн-серверу (пачки синхронизации)
+        RateLimiter::for('restaurant-sync', fn (Request $request) => Limit::perMinute(120)->by('restaurant-sync|'.sha1((string) ($request->bearerToken() ?: $request->ip()))));
 
         // API documentation (Scramble) is public — open source project, docs should be viewable
         // by anyone. Protect via SCRAMBLE_DOCS_TOKEN env if desired (RestrictedDocsAccess).
