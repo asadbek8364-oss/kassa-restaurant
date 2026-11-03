@@ -89,6 +89,12 @@ abstract class KassaController extends Controller
 
     protected function checkData(array $data, array $rules): array
     {
-        return validator($data, $rules, self::MESSAGES, self::ATTRIBUTES)->validate();
+        return validator($data, $rules, self::MESSAGES, $this->attributeNames())->validate();
+    }
+
+    /** Названия полей в сообщениях об ошибках; наследники дополняют своими. */
+    protected function attributeNames(): array
+    {
+        return self::ATTRIBUTES;
     }
 }

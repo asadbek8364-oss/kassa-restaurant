@@ -3,17 +3,19 @@
 namespace App\Models\Kassa;
 
 use App\Models\Kassa\Concerns\BelongsToStore;
+use App\Models\Kassa\Concerns\HasSyncUuid;
 use Illuminate\Database\Eloquent\Model;
 
 class Product extends Model
 {
     use BelongsToStore;
+    use HasSyncUuid;
 
     public const CATEGORIES = ['chargers', 'cables', 'cases', 'screen', 'audio', 'accessories'];
 
     protected $table = 'kassa_products';
 
-    protected $fillable = ['name', 'category', 'barcode', 'buy_price', 'sell_price', 'stock', 'min_stock'];
+    protected $fillable = ['name', 'category', 'barcode', 'buy_price', 'sell_price', 'stock', 'min_stock', 'uuid'];
 
     protected $casts = [
         'buy_price' => 'integer',

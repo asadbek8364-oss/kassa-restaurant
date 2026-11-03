@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Ресторан · Кухня — демо</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Экран кухни: заказы колонками «Новые → Готовятся → Готово»">
+<meta name="theme-color" content="#0b0f14">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Кухня">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="robots" content="noindex">
+<link rel="icon" href="assets/icons/kitchen.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icons/kitchen-192.png">
+<link rel="stylesheet" href="assets/restaurant.css?v=33c8a4f4a6">
+</head>
+
+<body class="app-kitchen" data-app="kitchen">
+<div class="kds-shell" id="shell" hidden>
+  <header class="kds-top">
+    <div class="kds-brand"><strong id="brand-name">Кухня</strong><span class="kds-clock" id="clock"></span></div>
+    <div class="kds-alerts" id="alerts"></div>
+    <div class="kds-actions">
+      <button class="kds-btn" data-act="stopList" id="stop-btn">Стоп-лист</button>
+      <button class="kds-btn" data-act="sound" id="sound-btn" aria-pressed="false">Звук</button>
+      <button class="kds-btn" data-act="fullscreen">На весь экран</button>
+      <button class="kds-btn" data-act="account" id="who"></button>
+    </div>
+  </header>
+  <main class="kds-board" id="view"><div class="boot">Загрузка…</div>
+</main>
+</div>
+<div class="kds-unlock" id="unlock" hidden>
+  <button class="kds-unlock-btn" data-act="unlock">Нажмите, чтобы включить звук и начать</button>
+</div>
+<main class="login-view" id="login" hidden></main>
+<div class="modal-layer" id="modal" hidden>
+  <div class="modal-backdrop" data-act="modalClose"></div>
+  <div class="modal" role="dialog" aria-modal="true" id="modal-box"></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<iframe id="print-frame" class="print-frame" title="Печать чека" tabindex="-1" aria-hidden="true"></iframe>
+<noscript><p class="noscript">Для работы приложения включите JavaScript.</p></noscript>
+
+<script src="assets/demo-server.js?v=33c8a4f4a6"></script>
+<script src="assets/common.js?v=33c8a4f4a6"></script>
+<script src="assets/kitchen.js?v=33c8a4f4a6"></script>
+</body>
+</html>

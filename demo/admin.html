@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Ресторан · Админка — демо</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Меню, столики, сотрудники, отчёты, принтер и синхронизация ресторана">
+<meta name="theme-color" content="#3730a3">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Админка">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="robots" content="noindex">
+<link rel="icon" href="assets/icons/admin.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icons/admin-192.png">
+<link rel="stylesheet" href="assets/restaurant.css?v=33c8a4f4a6">
+</head>
+
+<body class="app-admin" data-app="admin">
+<div class="admin-shell" id="shell" hidden>
+  <aside class="admin-side" aria-label="Разделы админки">
+    <div class="brand">
+      <img src="assets/icons/admin.svg" alt="" width="36" height="36">
+      <div class="brand-text"><strong id="brand-name">Ресторан</strong><span id="brand-mode"></span></div>
+    </div>
+    <nav class="side-nav" id="side-nav"></nav>
+    <div class="side-foot" id="side-foot"></div>
+  </aside>
+  <div class="admin-main">
+    <header class="admin-top">
+      <div class="top-title"><span class="eyebrow" id="eyebrow"></span><h1 id="title">Админка</h1></div>
+      <div class="top-actions" id="top-actions"></div>
+    </header>
+    <div class="banner" id="banner" hidden></div>
+    <main class="admin-view" id="view" tabindex="-1"><div class="boot">Загрузка…</div>
+</main>
+  </div>
+  <nav class="bottom-nav" id="bottom-nav" aria-label="Разделы"></nav>
+</div>
+<main class="login-view" id="login" hidden></main>
+<div class="modal-layer" id="modal" hidden>
+  <div class="modal-backdrop" data-act="modalClose"></div>
+  <div class="modal" role="dialog" aria-modal="true" id="modal-box"></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<iframe id="print-frame" class="print-frame" title="Печать чека" tabindex="-1" aria-hidden="true"></iframe>
+<noscript><p class="noscript">Для работы приложения включите JavaScript.</p></noscript>
+
+<script src="assets/demo-server.js?v=33c8a4f4a6"></script>
+<script src="assets/common.js?v=33c8a4f4a6"></script>
+<script src="assets/admin.js?v=33c8a4f4a6"></script>
+</body>
+</html>

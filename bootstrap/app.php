@@ -1,9 +1,11 @@
 <?php
 
 use App\Http\Middleware\AuthenticateKassa;
+use App\Http\Middleware\AuthenticateRestaurantSync;
 use App\Http\Middleware\EnforceAbsoluteSessionLifetime;
 use App\Http\Middleware\EnsureActiveCashierShift;
 use App\Http\Middleware\EnsureBotGuard;
+use App\Http\Middleware\EnsureKassaApp;
 use App\Http\Middleware\EnsureKassaOwner;
 use App\Http\Middleware\EnsureNotInstalled;
 use App\Http\Middleware\EnsurePublicRegistrationEnabled;
@@ -17,6 +19,7 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Middleware\AddLinkHeadersForPreloadedAssets;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Laravel\Sanctum\Exceptions\MissingAbilityException;
@@ -34,6 +37,11 @@ return Application::configure(basePath: dirname(__DIR__))
         api: __DIR__.'/../routes/api.php',
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
+        // Ресторан: страницы приложений /admin, /waiter, /kitchen с манифестами PWA и service worker.
+        // Без группы web — страницам не нужны сессия и cookie, вход по токену.
+        then: function () {
+            Route::middleware(SecureHeaders::class)->group(__DIR__.'/../routes/restaurant.php');
+        },
     )
     ->withMiddleware(function (Middleware $middleware) {
         $middleware->web(append: [
@@ -56,6 +64,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'abilities' => CheckAbilities::class,
             'kassa.auth' => AuthenticateKassa::class,
             'kassa.owner' => EnsureKassaOwner::class,
+            'kassa.app' => EnsureKassaApp::class,
+            'restaurant.sync' => AuthenticateRestaurantSync::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

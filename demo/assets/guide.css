@@ -1,0 +1,119 @@
+/* Руководство пользователя: экран (в лаунчере и отдельно) и печать в PDF A4. */
+:root {
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Ubuntu, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --text: #1a1f2c;
+  --muted: #5f6880;
+  --line: #e1e5ef;
+  --bg: #f6f7fb;
+  --accent: #4338ca;
+  --waiter: #0f766e;
+  --kitchen: #c2410c;
+  --tip: #e9f7ef;
+  --tip-ink: #0b5d3b;
+  --warn: #fff3dc;
+  --warn-ink: #6b3d00;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; font-family: var(--font); font-size: 16px; line-height: 1.6; color: var(--text); background: #fff; -webkit-text-size-adjust: 100%; }
+a { color: var(--accent); }
+img { max-width: 100%; }
+
+.g-layout { display: grid; grid-template-columns: 270px minmax(0, 1fr); min-height: 100vh; }
+.g-toc { position: sticky; top: 0; height: 100vh; overflow-y: auto; background: var(--bg); border-right: 1px solid var(--line); padding: 22px 16px; font-size: 14px; }
+.g-toc b { display: block; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 8px; }
+.g-toc ol { list-style: none; margin: 0; padding: 0; counter-reset: toc; }
+.g-toc > ol > li { counter-increment: toc; margin: 2px 0; }
+.g-toc > ol > li > a::before { content: counter(toc) ". "; color: var(--muted); }
+.g-toc a { display: block; padding: 4px 8px; border-radius: 8px; color: var(--text); text-decoration: none; }
+.g-toc a:hover { background: #e8ebf5; }
+.g-toc ol ol { padding-left: 14px; }
+.g-toc ol ol a { color: var(--muted); font-size: 13px; padding: 2px 8px; }
+.g-pdf { display: inline-flex; margin-top: 16px; padding: 8px 14px; border-radius: 10px; background: var(--accent); color: #fff !important; text-decoration: none; font-weight: 600; }
+
+.g-main { padding: 32px 48px 80px; max-width: 980px; }
+.cover { border-radius: 22px; padding: 40px 40px 36px; color: #fff; background: linear-gradient(135deg, #1e2a52, #3730a3 55%, #0f766e); margin-bottom: 36px; }
+.cover .apps { display: flex; gap: 14px; margin-bottom: 24px; }
+.cover .apps img { width: 64px; height: 64px; border-radius: 16px; box-shadow: 0 4px 14px rgba(0, 0, 0, .25); }
+.cover h1 { font-size: 38px; line-height: 1.15; margin: 0; letter-spacing: -.02em; }
+.cover .sub { font-size: 21px; margin: 10px 0 0; color: #e5e8ff; }
+.cover .what { margin: 22px 0 0; font-size: 16px; color: #dfe4ff; max-width: 680px; }
+.cover .meta { margin-top: 24px; font-size: 14px; color: #c9cff5; }
+
+h2 { font-size: 28px; line-height: 1.2; margin: 52px 0 14px; padding-top: 6px; border-top: 3px solid var(--accent); letter-spacing: -.01em; }
+h2 .n { color: var(--accent); margin-right: 8px; }
+h3 { font-size: 20px; margin: 30px 0 8px; }
+h4 { font-size: 16px; margin: 18px 0 6px; }
+p { margin: 8px 0; }
+ul, ol { margin: 8px 0; padding-left: 24px; }
+li { margin: 4px 0; }
+.ui { display: inline-block; font-weight: 700; font-size: .92em; padding: 0 7px; border-radius: 6px; background: #eef0fb; border: 1px solid #d9ddf3; white-space: nowrap; }
+.pin { font-family: var(--mono); font-weight: 800; letter-spacing: .08em; }
+code { font-family: var(--mono); font-size: .9em; background: #f0f2f8; padding: 1px 5px; border-radius: 5px; }
+pre { font-family: var(--mono); font-size: 13px; background: #141a2e; color: #e6e9f5; padding: 14px 16px; border-radius: 12px; overflow-x: auto; }
+
+figure { margin: 18px 0 22px; }
+figure img { display: block; width: 100%; border-radius: 12px; border: 1px solid var(--line); box-shadow: 0 6px 22px rgba(16, 24, 40, .1); }
+figure.narrow img { max-width: 360px; margin: 0 auto; }
+figure.half img { max-width: 620px; margin: 0 auto; }
+figcaption { font-size: 14px; color: var(--muted); margin-top: 8px; text-align: center; }
+
+table { width: 100%; border-collapse: collapse; margin: 12px 0 18px; font-size: 15px; }
+th { text-align: left; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border-bottom: 2px solid var(--line); padding: 8px 10px; }
+td { border-bottom: 1px solid var(--line); padding: 8px 10px; vertical-align: top; }
+.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: -2px; margin-right: 6px; border: 2px solid; }
+
+.tip, .warn, .note { border-radius: 12px; padding: 12px 16px; margin: 14px 0; }
+.tip { background: var(--tip); color: var(--tip-ink); }
+.warn { background: var(--warn); color: var(--warn-ink); }
+.note { background: #eef1fb; color: #2b3170; }
+.tip b:first-child, .warn b:first-child, .note b:first-child { display: block; margin-bottom: 2px; }
+
+.flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0 18px; counter-reset: flow; }
+.flow div { counter-increment: flow; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; font-size: 14px; }
+.flow div::before { content: counter(flow); display: inline-flex; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 800; align-items: center; justify-content: center; margin-right: 6px; font-size: 13px; }
+.flow b { display: inline; }
+.steps { counter-reset: s; list-style: none; padding: 0; }
+.steps > li { counter-increment: s; position: relative; padding-left: 40px; margin: 10px 0; }
+.steps > li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 800; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+.faq dt { font-weight: 700; margin-top: 16px; }
+.faq dd { margin: 4px 0 0; color: #2f3546; }
+
+@media (max-width: 900px) {
+  .g-layout { grid-template-columns: 1fr; }
+  .g-toc { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .g-main { padding: 20px 16px 60px; }
+  .cover { padding: 26px 20px; }
+  .cover h1 { font-size: 28px; }
+}
+
+/* ---------------------------------------------------------------- PDF (A4) */
+@media print {
+  @page { size: A4; margin: 16mm 15mm 18mm; }
+  html { scroll-behavior: auto; }
+  body { font-size: 10.5pt; line-height: 1.5; }
+  .g-layout { display: block; }
+  .g-toc { display: none; }
+  .g-main { padding: 0; max-width: none; }
+  .no-print { display: none !important; }
+  .cover { min-height: 245mm; border-radius: 0; margin: 0; padding: 70mm 18mm 0; display: flex; flex-direction: column; break-after: page; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .cover h1 { font-size: 30pt; }
+  .cover .sub { font-size: 16pt; }
+  .cover .meta { margin-top: auto; padding-bottom: 14mm; }
+  .print-toc { display: block !important; break-after: page; }
+  .print-toc h2 { break-before: auto; margin-top: 0; }
+  .print-toc ol { font-size: 11pt; line-height: 1.9; }
+  .print-toc a { color: var(--text); text-decoration: none; }
+  h2 { break-before: page; margin-top: 0; font-size: 20pt; }
+  h3 { font-size: 13.5pt; break-after: avoid; }
+  h4 { break-after: avoid; }
+  figure { break-inside: avoid; margin: 10px 0 14px; }
+  figure img { box-shadow: none; }
+  figure.wide img { max-height: 125mm; width: auto; max-width: 100%; margin: 0 auto; }
+  table, .tip, .warn, .note, .flow { break-inside: avoid; }
+  a { color: inherit; text-decoration: none; }
+  pre { white-space: pre-wrap; }
+  .cover, .tip, .warn, .note, .flow div, .ui, th, h2 { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+.print-toc { display: none; }

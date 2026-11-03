@@ -16,7 +16,7 @@ class Store extends Model
 
     protected $table = 'kassa_stores';
 
-    protected $fillable = ['name', 'address', 'is_demo', 'next_sale_no', 'next_return_no', 'next_income_no', 'next_audit_no'];
+    protected $fillable = ['name', 'address', 'is_demo', 'next_sale_no', 'next_return_no', 'next_income_no', 'next_audit_no', 'next_order_no'];
 
     protected $attributes = [
         'is_demo' => false,
@@ -24,6 +24,7 @@ class Store extends Model
         'next_return_no' => 1,
         'next_income_no' => 1,
         'next_audit_no' => 1,
+        'next_order_no' => 1,
     ];
 
     protected $casts = [
@@ -32,6 +33,7 @@ class Store extends Model
         'next_return_no' => 'integer',
         'next_income_no' => 'integer',
         'next_audit_no' => 'integer',
+        'next_order_no' => 'integer',
     ];
 
     /** Магазин текущего запроса (см. StoreContext). */
@@ -53,7 +55,7 @@ class Store extends Model
         return static::query()->whereKey($id)->lockForUpdate()->firstOrFail();
     }
 
-    /** Выдаёт следующий номер документа: sale | return | income | audit. */
+    /** Выдаёт следующий номер документа: sale | return | income | audit | order (заказ ресторана). */
     public function takeNumber(string $kind): int
     {
         $column = "next_{$kind}_no";

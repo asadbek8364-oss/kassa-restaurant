@@ -2,17 +2,22 @@
 
 namespace App\Models\Kassa;
 
+use App\Models\Restaurant\Concerns\SyncsFromOnline;
 use App\Support\Kassa\StoreContext;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * Сотрудник. Продавец работает в одном магазине (store_id), владелец — во всех (store_id = NULL).
- * В магазине видны его продавцы и все владельцы.
+ * Сотрудник. Продавец, администратор, официант и повар работают в одном магазине (ресторане, store_id),
+ * владелец — во всех (store_id = NULL). В магазине видны его сотрудники и все владельцы.
+ * Сотрудники ресторана приходят с онлайн-сервера (SyncsFromOnline); владельцы между серверами не передаются.
  */
 class Employee extends Model
 {
-    public const ROLES = ['owner', 'seller'];
+    use SyncsFromOnline;
+
+    /** owner — владелец, seller — продавец кассы, admin — администратор ресторана, waiter — официант, cook — повар. */
+    public const ROLES = ['owner', 'seller', 'admin', 'waiter', 'cook'];
 
     protected $table = 'kassa_employees';
 
@@ -24,7 +29,14 @@ class Employee extends Model
         'active' => 'boolean',
         'pin' => 'hashed',
         'store_id' => 'integer',
+        'version' => 'integer',
+        'synced_at' => 'datetime',
     ];
+
+    public function syncFields(): array
+    {
+        return ['name', 'role', 'phone', 'pin', 'active'];
+    }
 
     protected static function booted(): void
     {
