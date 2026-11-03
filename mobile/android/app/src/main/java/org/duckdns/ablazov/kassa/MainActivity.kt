@@ -35,7 +35,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
+import androidx.core.view.isVisible
 import androidx.core.view.WindowInsetsCompat
 import java.io.File
 
@@ -56,7 +59,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var offlineText: TextView
     private lateinit var progress: ProgressBar
 
-    private val home: Uri by lazy { Uri.parse(BuildConfig.KASSA_URL) }
+    private val home: Uri by lazy { BuildConfig.KASSA_URL.toUri() }
     private val prefs by lazy { getSharedPreferences("kassa", Context.MODE_PRIVATE) }
 
     private var loadFailed = false
@@ -168,7 +171,7 @@ class MainActivity : ComponentActivity() {
 
     /** «Назад»: сначала страница закрывает лист, сканер или экран (window.kassaBack), иначе сворачиваемся. */
     private fun back() {
-        if (offline.visibility == View.VISIBLE) {
+        if (offline.isVisible) {
             moveTaskToBack(true)
             return
         }
@@ -192,7 +195,7 @@ class MainActivity : ComponentActivity() {
         loadFailed = false
         progress.visibility = View.VISIBLE
         val current = web.url
-        if (current != null && isKassa(Uri.parse(current))) web.reload() else web.loadUrl(home.toString())
+        if (current != null && isKassa(current.toUri())) web.reload() else web.loadUrl(home.toString())
     }
 
     /** Сеть появилась — если касса не открылась, пробуем снова без нажатия кнопки. */
@@ -323,7 +326,7 @@ class MainActivity : ComponentActivity() {
         /** Копия очереди офлайн-чеков; commit() пишет на диск сразу, до возврата в страницу. */
         @JavascriptInterface
         fun saveQueue(json: String) {
-            prefs.edit().putString(KEY_QUEUE, json).commit()
+            prefs.edit(commit = true) { putString(KEY_QUEUE, json) }
         }
 
         @JavascriptInterface
