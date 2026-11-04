@@ -118,9 +118,11 @@
       if (before !== undefined && now[o.id] > before) fresh.push(o);
     });
     const firstLoad = !W.readyInit;
+    const quiet = W.quiet; // «Готово» отметили на этом устройстве — сигнал не нужен
     W.ready = now;
     W.readyInit = true;
-    if (firstLoad || !fresh.length) return;
+    W.quiet = false;
+    if (firstLoad || quiet || !fresh.length) return;
     const mine = fresh.filter((o) => o.waiter.id === R.me.employee.id);
     R.toast('Готово: ' + (mine.length ? mine : fresh).map((o) => o.label).join(', '), 'ok');
     R.unlockAudio();
@@ -198,7 +200,7 @@
     R.set(el, html`<a href="#tables" class="${W.view === 'tables' ? 'on' : ''}">Зал <span class="c">${busy}</span></a>
       <a href="#takeaway" class="${W.view === 'takeaway' ? 'on' : ''}">Навынос <span class="c${ready ? ' hot' : ''}" title="${ready ? 'готово к выдаче: ' + ready : ''}">${tw.length}</span></a>
       <span class="grow"></span>
-      <a class="btn btn-primary only-wide" href="#takeaway/new">+ Заказ навынос</a>`);
+      ${W.view === 'tables' ? html`<a class="btn btn-primary only-wide" href="#takeaway/new">+ Заказ навынос</a>` : ''}`);
   }
 
   // ---------------------------------------------------------------- схема зала
@@ -606,6 +608,7 @@
         const res = await api('POST', path, body || {});
         if (res && res.order && W.order && res.order.id === W.order.id) W.order = res.order;
         if (done) R.toast(typeof done === 'function' ? done(res) : done, 'ok');
+        W.quiet = true;
         await refresh();
         if (W.order && !W.compose) rerender();
       } catch (e) { R.fail(e); refresh(); }
