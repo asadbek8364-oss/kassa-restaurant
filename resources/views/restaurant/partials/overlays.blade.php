@@ -11,4 +11,7 @@
 <script src="{{ $assets }}/demo-server.js?v={{ $v }}"></script>
 @endif
 <script src="{{ $assets }}/common.js?v={{ $v }}"></script>
+@if($floor ?? false)
+<script src="{{ $assets }}/floor.js?v={{ $v }}"></script>
+@endif
 <script src="{{ $assets }}/{{ $app }}.js?v={{ $v }}"></script>

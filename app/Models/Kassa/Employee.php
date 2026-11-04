@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 
 /**
- * Сотрудник. Продавец, администратор, официант и повар работают в одном магазине (ресторане, store_id),
+ * Сотрудник. Продавец, администратор, официант, кассир и повар работают в одном магазине (ресторане, store_id),
  * владелец — во всех (store_id = NULL). В магазине видны его сотрудники и все владельцы.
  * Сотрудники ресторана приходят с онлайн-сервера (SyncsFromOnline); владельцы между серверами не передаются.
  */
@@ -16,8 +16,11 @@ class Employee extends Model
 {
     use SyncsFromOnline;
 
-    /** owner — владелец, seller — продавец кассы, admin — администратор ресторана, waiter — официант, cook — повар. */
-    public const ROLES = ['owner', 'seller', 'admin', 'waiter', 'cook'];
+    /**
+     * owner — владелец, seller — продавец кассы, admin — администратор ресторана, waiter — официант,
+     * cashier — кассир ресторана (навынос и приём оплаты), cook — повар.
+     */
+    public const ROLES = ['owner', 'seller', 'admin', 'waiter', 'cashier', 'cook'];
 
     protected $table = 'kassa_employees';
 

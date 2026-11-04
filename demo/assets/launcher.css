@@ -113,10 +113,11 @@ button { font: inherit; cursor: pointer; }
 .ln-stage { flex: 1; min-height: 0; display: flex; gap: 12px; padding: 12px; justify-content: center; }
 .ln-frame { flex: 1 1 0; min-width: 0; height: 100%; border: 0; border-radius: 14px; background: #fff; box-shadow: var(--shadow); }
 .ln-frame-doc { max-width: 1100px; }
-.ln-frame.phone { flex: 0 0 390px; max-width: 390px; border: 10px solid #1b2030; border-radius: 34px; }
+/* телефон официанта и кассира: 402 CSS-px внутри рамки — как iPhone 17 */
+.ln-frame.phone { flex: 0 0 422px; max-width: 422px; border: 10px solid #1b2030; border-radius: 34px; }
 .ln-frame.tablet { max-width: 1180px; }
-.ln-frame.dark { background: #0b0f14; }
-.ln-together .ln-frame.dark { flex: 1 1 auto; }
+.ln-frame.kds { background: #ffffff; }
+.ln-together .ln-frame.kds { flex: 1 1 auto; }
 .ln-tape-panel { flex: 0 0 280px; display: flex; flex-direction: column; background: #d9dde6; border-radius: 14px; overflow: hidden; }
 /* «Официант + кухня»: меню сворачивается до иконок, чтобы экрану кухни хватило ширины на три колонки */
 @media (min-width: 861px) {

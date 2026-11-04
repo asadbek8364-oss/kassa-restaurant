@@ -377,6 +377,7 @@ class SyncServer
         $order->forceFill([
             'uuid' => $d['uuid'],
             'number' => max(1, SyncFormat::int($d['number'] ?? 1)),
+            'type' => in_array($d['type'] ?? null, Order::TYPES, true) ? $d['type'] : 'table',
             'table_id' => $this->id(Table::class, $d['table_uuid'] ?? null, true),
             'table_name' => SyncFormat::str($d['table_name'] ?? null, 20),
             'waiter_id' => $this->id(Employee::class, $d['waiter_uuid'] ?? null),

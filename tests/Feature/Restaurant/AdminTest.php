@@ -39,12 +39,13 @@ class AdminTest extends TestCase
         $this->assertTrue(collect($menu->json('dishes'))->firstWhere('name', 'Шурпа из баранины')['stop']);
         $this->openOrder($this->t1, [['dish_id' => $dish['id'], 'qty' => 1]])->assertUnprocessable();
 
-        // стоп-лист можно снять и с кухни
+        // экран кухни только показывает заказы: стоп-лист ведёт админка, на доске кухни он виден
         $this->actAs($this->cook);
-        $this->postJson("/api/restaurant/kitchen/dishes/{$dish['id']}/stop", ['stop' => false])->assertOk();
-        $this->getJson('/api/restaurant/kitchen/menu')->assertOk();
+        $this->assertSame(['Шурпа из баранины'], $this->getJson('/api/restaurant/kitchen/board')->json('stop_list'));
+        $this->postJson("/api/restaurant/kitchen/dishes/{$dish['id']}/stop", ['stop' => false])->assertNotFound();
 
         $this->actAs($this->admin);
+        $this->postJson("/api/restaurant/admin/dishes/{$dish['id']}/stop", ['stop' => false])->assertOk()->assertJsonPath('dish.stop', false);
         $this->deleteJson("/api/restaurant/admin/categories/{$soups['id']}")->assertUnprocessable();
         $this->deleteJson("/api/restaurant/admin/dishes/{$dish['id']}")->assertOk();
         $this->assertSoftDeleted('restaurant_dishes', ['id' => $dish['id']]);
@@ -88,7 +89,8 @@ class AdminTest extends TestCase
         $this->withToken($token)->getJson('/api/restaurant/waiter/state')->assertUnauthorized();
         $this->actAs($this->admin);
         $this->postJson("/api/restaurant/admin/staff/{$this->admin->id}/toggle")->assertUnprocessable();
-        $this->assertSame(['Дилшод Каримов', 'Азиз Рахимов', 'Шахзода Юсупова', 'Мадина Алиева'], array_column($this->getJson('/api/restaurant/admin/staff')->json('staff'), 'name'));
+        // активные: администратор, кассир, официант, повар; отключённые — в конце
+        $this->assertSame(['Дилшод Каримов', 'Малика Турсунова', 'Азиз Рахимов', 'Шахзода Юсупова', 'Мадина Алиева'], array_column($this->getJson('/api/restaurant/admin/staff')->json('staff'), 'name'));
     }
 
     public function test_restaurant_settings(): void
@@ -108,9 +110,7 @@ class AdminTest extends TestCase
         $pay = function (Table $table, array $lines) {
             $this->actAs($this->waiter);
             $order = $this->openOrder($table, $lines)->assertCreated()->json('order');
-            $this->actAs($this->cook);
-            $this->postJson("/api/restaurant/kitchen/tickets/{$order['tickets'][0]['id']}/ready")->assertOk();
-            $this->actAs($this->waiter);
+            $this->mark($order, 'ready')->assertOk();
             $this->postJson("/api/restaurant/waiter/orders/{$order['id']}/pay", ['payment' => 'card'])->assertOk();
         };
 

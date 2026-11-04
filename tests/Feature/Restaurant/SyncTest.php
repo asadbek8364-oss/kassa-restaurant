@@ -148,14 +148,12 @@ class SyncTest extends TestCase
         return app(SyncClient::class)->run($this->store, 'manual');
     }
 
-    /** Оплаченный заказ на столике (через приложения официанта и кухни). */
+    /** Оплаченный заказ на столике (через приложение официанта: заказ, «готово», оплата). */
     private function paidOrder(Table $table, array $lines): array
     {
         $this->actAs($this->waiter);
         $order = $this->openOrder($table, $lines)->assertCreated()->json('order');
-        $this->actAs($this->cook);
-        $this->postJson("/api/restaurant/kitchen/tickets/{$order['tickets'][0]['id']}/ready")->assertOk();
-        $this->actAs($this->waiter);
+        $this->mark($order, 'ready')->assertOk();
 
         return $this->postJson("/api/restaurant/waiter/orders/{$order['id']}/pay", ['payment' => 'cash', 'received' => 100000])->assertOk()->json('order');
     }

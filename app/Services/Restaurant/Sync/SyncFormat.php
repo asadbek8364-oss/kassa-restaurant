@@ -20,11 +20,14 @@ use Illuminate\Support\Str;
  */
 class SyncFormat
 {
-    /** Версия формата: онлайн-сервер отклоняет пакеты неизвестного формата. */
-    public const VERSION = 1;
+    /**
+     * Версия формата: онлайн-сервер отклоняет пакеты неизвестного формата, локальный — такие же справочники.
+     * 2 — кассир (роль cashier) и заказы навынос (type у заказа).
+     */
+    public const VERSION = 2;
 
     /** Роли сотрудников, которые передаются между серверами (владельцы — свои на каждом сервере). */
-    public const STAFF_ROLES = ['admin', 'waiter', 'cook', 'seller'];
+    public const STAFF_ROLES = ['admin', 'waiter', 'cashier', 'cook', 'seller'];
 
     public static function time(DateTimeInterface|string|null $value): ?string
     {

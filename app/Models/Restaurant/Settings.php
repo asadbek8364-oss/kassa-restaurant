@@ -9,8 +9,8 @@ use Illuminate\Database\UniqueConstraintViolationException;
 
 /**
  * Настройки ресторана (одна строка на магазин).
- * Норматив приготовления и тексты чека приходят с онлайн-сервера; принтер и параметры синхронизации —
- * настройки этого сервера и между серверами не передаются.
+ * Норматив приготовления и тексты чека приходят с онлайн-сервера; принтер, платёжный терминал кассы
+ * и параметры синхронизации — настройки этого сервера и между серверами не передаются.
  */
 class Settings extends Model
 {
@@ -30,6 +30,7 @@ class Settings extends Model
     protected $fillable = [
         'cook_minutes', 'receipt_header', 'receipt_footer',
         'printer_mode', 'printer_host', 'printer_port', 'printer_codepage', 'printer_width',
+        'terminal_enabled', 'terminal_host', 'terminal_port', 'terminal_test',
         'sync_url', 'sync_token', 'sync_token_hash', 'sync_token_hint', 'sync_token_issued_at',
     ];
 
@@ -41,6 +42,8 @@ class Settings extends Model
         'printer_port' => 9100,
         'printer_codepage' => 'cp866',
         'printer_width' => 48,
+        'terminal_enabled' => false,
+        'terminal_test' => false,
     ];
 
     protected $casts = [
@@ -49,6 +52,9 @@ class Settings extends Model
         'cook_minutes' => 'integer',
         'printer_port' => 'integer',
         'printer_width' => 'integer',
+        'terminal_enabled' => 'boolean',
+        'terminal_port' => 'integer',
+        'terminal_test' => 'boolean',
         'sync_token' => 'encrypted',
         'sync_token_issued_at' => 'datetime',
     ];
@@ -75,6 +81,12 @@ class Settings extends Model
     public function printingEnabled(): bool
     {
         return $this->printer_mode === 'network' || $this->printer_mode === 'browser';
+    }
+
+    /** Оплата картой у кассира идёт через терминал (настоящий или эмулятор тестового режима). */
+    public function terminalOn(): bool
+    {
+        return (bool) $this->terminal_enabled;
     }
 
     /** Локальный сервер знает, куда и с каким токеном синхронизироваться. */

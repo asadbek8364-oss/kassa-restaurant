@@ -1,33 +1,39 @@
 /*
  * «Ресторан» — демо-версия без сервера: эмулятор API /api/restaurant прямо в браузере.
  *
- * Приложения демо-версии — те же файлы, что и на сервере (assets/common.js, admin.js, waiter.js, kitchen.js):
- * common.js видит window.RESTAURANT_DEMO и отправляет запросы сюда. Логика повторяет сервер
- * (app/Services/Restaurant): статусы заказа, дозаказ отдельным тикетом, стоп-лист, роли, оплата, отчёты,
- * очередь печати (виртуальный принтер) и синхронизация (онлайн-сервер имитируется).
+ * Приложения демо-версии — те же файлы, что и на сервере (assets/common.js, floor.js, admin.js, waiter.js,
+ * cashier.js, kitchen.js): common.js видит window.RESTAURANT_DEMO и отправляет запросы сюда. Логика повторяет
+ * сервер (app/Services/Restaurant): статусы заказа (отметки ставят официант, кассир и админка — экран кухни только
+ * показывает), дозаказ отдельным тикетом, заказы навынос с оплатой заранее и «Выдан», оплата картой через
+ * эмулятор терминала, стоп-лист, роли, отчёты, очередь печати (виртуальный принтер) и синхронизация
+ * (онлайн-сервер имитируется).
  *
  * Данные демо-ресторана хранятся в localStorage этого браузера и общие для всех вкладок и окон:
  * заказ, отправленный официантом, сразу видит экран кухни в соседней вкладке или в лаунчере.
  */
 'use strict';
 (function () {
-  const KEY = 'restoran-demo:state:v1';
+  const KEY = 'restoran-demo:state:v2';
   const SEEN = 'restoran-demo:seen';
   const MIN = 60000;
   const HOUR = 3600000;
-  const URLS = { admin: 'admin.html', waiter: 'waiter.html', kitchen: 'kitchen.html', kassa: 'https://asadbek8364-oss.github.io/kassa-demo/', launcher: 'index.html' };
-  const PINS = { admin: '1111', waiter: '2222', cook: '3333' };
-  const HINT = 'Демо: администратор — PIN 1111, официант — 2222, повар — 3333';
-  const ROLE_NAMES = { owner: 'Владелец', admin: 'Администратор', waiter: 'Официант', cook: 'Повар', seller: 'Продавец' };
-  const ACCESS = { admin: ['owner', 'admin'], waiter: ['owner', 'admin', 'waiter'], kitchen: ['owner', 'admin', 'cook'], kassa: ['owner', 'admin', 'seller'] };
-  const APP_NAMES = { admin: 'админка ресторана', waiter: 'приложение официанта', kitchen: 'экран кухни', kassa: 'касса и склад' };
+  const URLS = { admin: 'admin.html', waiter: 'waiter.html', cashier: 'cashier.html', kitchen: 'kitchen.html', kassa: 'https://asadbek8364-oss.github.io/kassa-demo/', launcher: 'index.html' };
+  const PINS = { admin: '1111', waiter: '2222', cook: '3333', cashier: '4444' };
+  const HINT = 'Демо: администратор — PIN 1111, официант — 2222, повар — 3333, кассир — 4444';
+  const ROLE_NAMES = { owner: 'Владелец', admin: 'Администратор', waiter: 'Официант', cashier: 'Кассир', cook: 'Повар', seller: 'Продавец' };
+  const ACCESS = { admin: ['owner', 'admin'], waiter: ['owner', 'admin', 'waiter'], cashier: ['owner', 'admin', 'cashier'], kitchen: ['owner', 'admin', 'cook'], kassa: ['owner', 'admin', 'seller'] };
+  const APP_NAMES = { admin: 'админка ресторана', waiter: 'приложение официанта', cashier: 'приложение кассира', kitchen: 'экран кухни', kassa: 'касса и склад' };
+  const APPS = ['admin', 'waiter', 'cashier', 'kitchen'];
+  const HOME_ROLE = { admin: 'admin', waiter: 'waiter', cashier: 'cashier', kitchen: 'cook' };
   const STATUS_NAMES = { new: 'Новый', cooking: 'Готовится', ready: 'Готов', served: 'Подан', paid: 'Оплачен', cancelled: 'Отменён' };
+  const ITEM_NAMES = { new: 'Новое', cooking: 'Готовится', ready: 'Готово', served: 'Подано', cancelled: 'Отменено' };
+  const TERM_NAMES = { pending: 'Ожидает терминал', approved: 'Оплачено', declined: 'Отклонено', cancelled: 'Отменено', error: 'Ошибка терминала' };
   const KIND_NAMES = { kitchen: 'Кухня', cancel: 'Отмена', guest: 'Счёт гостю', test: 'Тест' };
   const OPEN = ['new', 'cooking', 'ready', 'served'];
   const FINAL = ['paid', 'cancelled'];
   const ON_BOARD = ['new', 'cooking', 'ready'];
-  const STAFF_ROLES = ['admin', 'waiter', 'cook'];
-  const home = (role) => (role === 'owner' || role === 'admin' ? 'admin' : role === 'waiter' ? 'waiter' : role === 'cook' ? 'kitchen' : 'kassa');
+  const STAFF_ROLES = ['admin', 'waiter', 'cashier', 'cook'];
+  const home = (role) => (role === 'owner' || role === 'admin' ? 'admin' : role === 'waiter' ? 'waiter' : role === 'cashier' ? 'cashier' : role === 'cook' ? 'kitchen' : 'kassa');
 
   // ---------------------------------------------------------------- время и форматы
   const now = () => Date.now();
@@ -65,7 +71,7 @@
   function load() {
     let s = null;
     try { s = JSON.parse(storage.get(KEY) || 'null'); } catch (e) { s = null; }
-    if (!s || s.v !== 1) {
+    if (!s || s.v !== 2) {
       s = seed(now());
       persist(s);
       return s;
@@ -89,6 +95,7 @@
     s.tickets.forEach((t) => move(t, ['sent']));
     s.jobs.forEach((j) => move(j, ['created', 'printed', 'next']));
     s.logs.forEach((l) => move(l, ['started', 'finished']));
+    (s.payments || []).forEach((p) => move(p, ['created', 'finished']));
     s.created += delta;
   }
 
@@ -133,20 +140,23 @@
     const rnd = mulberry32(20261104);
     const int = (n) => Math.floor(rnd() * n);
     const s = {
-      v: 1, created: t, printerOn: true, syncOffline: false,
-      seq: { order: 0, sale: 1000, item: 0, ticket: 0, job: 0, dish: 0, cat: 0, table: 0, emp: 0, log: 0 },
+      v: 2, created: t, printerOn: true, syncOffline: false,
+      seq: { order: 0, sale: 1000, item: 0, ticket: 0, job: 0, dish: 0, cat: 0, table: 0, emp: 0, log: 0, payment: 0 },
       store: { id: 1, name: 'Демо-ресторан «Навруз»', address: 'г. Ташкент, ул. Навои, 30', is_demo: true },
       settings: {
         cook_minutes: 15, receipt_header: null, receipt_footer: 'Спасибо, что были у нас! Ждём снова',
         printer_mode: 'network', printer_host: '192.168.1.50', printer_port: 9100, printer_codepage: 'cp866', printer_width: 48,
         sync_url: 'https://online.example.uz', sync_token: true, unsynced: false,
+        // терминал кассы — эмулятор: «Отправить на терминал» и имитация оплаты или отказа
+        terminal_enabled: true, terminal_test: true, terminal_host: null, terminal_port: null,
       },
-      staff: [], categories: [], dishes: [], tables: [], orders: [], items: [], tickets: [], jobs: [], logs: [], tokens: {},
+      staff: [], categories: [], dishes: [], tables: [], orders: [], items: [], tickets: [], jobs: [], logs: [], payments: [], tokens: {},
     };
     const emp = (name, role, phone) => { const e = { id: ++s.seq.emp, name, role, phone, pin: PINS[role], active: true, unsynced: false }; s.staff.push(e); return e; };
     const admin = emp('Дилшод Каримов', 'admin', '+998 90 123-45-67');
     const waiter = emp('Азиз Рахимов', 'waiter', '+998 93 541-20-18');
     emp('Шахзода Юсупова', 'cook', '+998 97 730-55-02');
+    const cashier = emp('Малика Турсунова', 'cashier', '+998 99 812-33-40');
 
     const cats = {};
     const weights = {};
@@ -178,7 +188,7 @@
       return [...chosen.values()];
     };
 
-    // оплаченные заказы за 14 прошлых дней и сегодня до текущего часа
+    // оплаченные заказы за 14 прошлых дней и сегодня до текущего часа; примерно каждый шестой — навынос
     const today = dayStart(t);
     const plans = [];
     for (let d = 14; d >= 0; d--) {
@@ -190,15 +200,17 @@
     plans.sort((a, b) => a - b);
     for (const opened of plans) {
       const paid = Math.max(opened + MIN, Math.min(opened + (35 + int(50)) * MIN, t - 5 * MIN));
-      const table = s.tables[int(s.tables.length)];
-      const by = rnd() < 0.8 ? waiter : admin;
-      const lines = pick(2 + int(4));
+      const takeaway = rnd() < 0.17;
+      const table = takeaway ? null : s.tables[int(s.tables.length)];
+      const by = takeaway ? cashier : rnd() < 0.8 ? waiter : admin;
+      const lines = pick(takeaway ? 1 + int(3) : 2 + int(4));
       const total = sum(lines, (l) => l.dish.price * l.qty);
       const payment = rnd() < 0.55 ? 'card' : 'cash';
       const received = payment === 'cash' ? Math.ceil(total / 50000) * 50000 : null;
       const o = {
-        id: ++s.seq.order, number: s.seq.order, table_id: table.id, table_name: table.name, waiter_id: by.id, waiter_name: by.name,
-        guests: 1 + int(table.seats), comment: null, status: 'paid', total, payment, received, change: received ? received - total : 0,
+        id: ++s.seq.order, number: s.seq.order, type: takeaway ? 'takeaway' : 'table', table_id: table ? table.id : null, table_name: table ? table.name : null,
+        waiter_id: by.id, waiter_name: by.name,
+        guests: table ? 1 + int(table.seats) : null, comment: null, status: 'paid', total, payment, received, change: received ? received - total : 0,
         sale_number: ++s.seq.sale, closed_by: by.id, created: opened, bill: paid - 3 * MIN, paid, cancelled: null, cancel_reason: null, synced: null,
       };
       s.orders.push(o);
@@ -212,27 +224,31 @@
     let lastSync = today + 3 * HOUR + 40 * MIN;
     if (lastSync > t) lastSync = addDays(lastSync, -1);
     const sent = s.orders.filter((o) => o.paid < lastSync);
-    sent.forEach((o) => { o.synced = lastSync; });
+    sent.forEach((o) => { o.synced = lastSync; o.saleSynced = true; });
     s.logs.push({ id: ++s.seq.log, direction: 'sync', trigger: 'schedule', status: 'ok', started: lastSync, finished: lastSync + 4000,
       sent: { orders: sent.filter((o) => o.paid >= addDays(lastSync, -1)).length, sales: sent.filter((o) => o.paid >= addDays(lastSync, -1)).length }, received: {}, error: null });
 
-    // открытые заказы в разных статусах
+    // открытые заказы в разных статусах: за столиками и навынос (один оплачен заранее картой, другой ждёт оплаты при выдаче)
     const dish = (name) => s.dishes.find((d) => d.name === name);
     [
-      [1, 3, 2, [['Лагман', 2, 'без зелени', 'new'], ['Самса с мясом', 2, null, 'new'], ['Чай зелёный (чайник)', 1, null, 'new']], null, false],
-      [2, 9, 4, [['Плов чайханский', 3, null, 'cooking'], ['Ачичук', 2, null, 'ready'], ['Лепёшка тандырная', 2, null, 'cooking'], ['Шашлык из баранины', 4, 'хорошо прожарить', 'new']], 'у гостя аллергия на орехи', false],
-      [4, 18, 3, [['Манты (5 шт.)', 2, null, 'ready'], ['Шурпа', 1, 'острое', 'ready'], ['Компот домашний', 3, null, 'ready']], null, false],
-      [6, 55, 5, [['Плов чайханский', 2, null, 'served'], ['Шашлык из курицы', 3, null, 'served'], ['Айран', 2, null, 'served'], ['Чай чёрный с лимоном', 1, null, 'served']], null, true],
-    ].forEach(([ti, minutes, guests, lines, comment, bill]) => {
-      const table = s.tables[ti];
+      [1, 3, 2, [['Лагман', 2, 'без зелени', 'new'], ['Самса с мясом', 2, null, 'new'], ['Чай зелёный (чайник)', 1, null, 'new']], null, false, null],
+      [2, 9, 4, [['Плов чайханский', 3, null, 'cooking'], ['Ачичук', 2, null, 'ready'], ['Лепёшка тандырная', 2, null, 'cooking'], ['Шашлык из баранины', 4, 'хорошо прожарить', 'new']], 'у гостя аллергия на орехи', false, null],
+      [4, 18, 3, [['Манты (5 шт.)', 2, null, 'ready'], ['Шурпа', 1, 'острое', 'ready'], ['Компот домашний', 3, null, 'ready']], null, false, null],
+      [6, 55, 5, [['Плов чайханский', 2, null, 'served'], ['Шашлык из курицы', 3, null, 'served'], ['Айран', 2, null, 'served'], ['Чай чёрный с лимоном', 1, null, 'served']], null, true, null],
+      [null, 6, null, [['Плов чайханский', 2, null, 'cooking'], ['Самса с мясом', 4, null, 'cooking'], ['Лепёшка тандырная', 1, null, 'ready']], 'Анвар, заберёт в 13:30', false, 'card'],
+      [null, 12, null, [['Шашлык из курицы', 2, 'соус отдельно', 'ready'], ['Компот домашний', 2, null, 'ready']], 'Гульнора', false, null],
+    ].forEach(([ti, minutes, guests, lines, comment, bill, prepaid]) => {
+      const table = ti === null ? null : s.tables[ti];
+      const by = table ? waiter : cashier;
       const sentAt = t - minutes * MIN;
       const o = {
-        id: ++s.seq.order, number: s.seq.order, table_id: table.id, table_name: table.name, waiter_id: waiter.id, waiter_name: waiter.name,
+        id: ++s.seq.order, number: s.seq.order, type: table ? 'table' : 'takeaway', table_id: table ? table.id : null, table_name: table ? table.name : null,
+        waiter_id: by.id, waiter_name: by.name,
         guests, comment, status: 'new', total: 0, payment: null, received: null, change: 0, sale_number: null, closed_by: null,
         created: sentAt, bill: bill ? t - 2 * MIN : null, paid: null, cancelled: null, cancel_reason: null, synced: null,
       };
       s.orders.push(o);
-      const tk = { id: ++s.seq.ticket, order_id: o.id, batch: 1, employee_id: waiter.id, comment, client_uuid: null, sent: sentAt };
+      const tk = { id: ++s.seq.ticket, order_id: o.id, batch: 1, employee_id: by.id, comment, client_uuid: null, sent: sentAt };
       s.tickets.push(tk);
       lines.forEach(([name, qty, c, status]) => {
         const d = dish(name);
@@ -244,6 +260,7 @@
         });
       });
       refreshStatus(s, o);
+      if (prepaid) Object.assign(o, { payment: prepaid, sale_number: ++s.seq.sale, paid: sentAt + MIN, bill: sentAt + MIN });
     });
     return s;
   }
@@ -305,14 +322,16 @@
   const empName = (s, id) => { const e = s.staff.find((x) => x.id === id); return e ? e.name : null; };
   const itemsOf = (s, o) => s.items.filter((i) => i.order_id === o.id);
   const active = (items) => items.filter((i) => i.status !== 'cancelled');
+  const placeOf = (o) => (o.type === 'takeaway' ? 'Навынос' : 'Стол ' + o.table_name);
+  const isPaid = (o) => o.status === 'paid' || !!o.sale_number;
 
   function summaryOut(s, o, items) {
     const list = items || itemsOf(s, o);
     return {
-      id: o.id, number: o.number, table_id: o.table_id, table_name: o.table_name, waiter: { id: o.waiter_id, name: o.waiter_name },
+      id: o.id, number: o.number, type: o.type || 'table', place: placeOf(o), table_id: o.table_id, table_name: o.table_name, waiter: { id: o.waiter_id, name: o.waiter_name },
       guests: o.guests, comment: o.comment, status: o.status, status_name: STATUS_NAMES[o.status], total: o.total,
       items_count: sum(active(list), (i) => i.qty), ready_count: sum(list.filter((i) => i.status === 'ready'), (i) => i.qty),
-      payment: o.payment, created_at: iso(o.created), bill_at: iso(o.bill), paid_at: iso(o.paid), cancelled_at: iso(o.cancelled),
+      payment: o.payment, paid: isPaid(o), created_at: iso(o.created), bill_at: iso(o.bill), paid_at: iso(o.paid), cancelled_at: iso(o.cancelled),
     };
   }
   const itemOut = (i) => ({
@@ -323,6 +342,7 @@
     const items = itemsOf(s, o).sort(byId);
     return Object.assign(summaryOut(s, o, items), {
       received: o.received, change: o.change, cancel_reason: o.cancel_reason, sale_number: o.sale_number,
+      terminal: (s.payments || []).filter((p) => p.order_id === o.id).sort((a, b) => b.id - a.id).map(termOut),
       items: items.map(itemOut),
       tickets: s.tickets.filter((t) => t.order_id === o.id).sort((a, b) => a.batch - b.batch)
         .map((t) => ({ id: t.id, batch: t.batch, comment: t.comment, sent_at: iso(t.sent), employee: empName(s, t.employee_id) })),
@@ -353,7 +373,7 @@
     const cooking = list.map((i) => i.cooking).filter(Boolean);
     const allReady = list.every((i) => i.status === 'ready' || i.status === 'served');
     return {
-      id: t.id, order_id: o.id, number: o.number, batch: t.batch, table_name: o.table_name, guests: o.guests,
+      id: t.id, order_id: o.id, number: o.number, batch: t.batch, takeaway: o.type === 'takeaway', place: placeOf(o), table_name: o.table_name, guests: o.guests,
       waiter: empName(s, t.employee_id) || o.waiter_name, comment: t.comment, column: aggregate(list), sent_at: iso(t.sent),
       started_at: cooking.length ? iso(Math.min(...cooking)) : null,
       ready_at: allReady && list.length ? iso(Math.max(...list.map((i) => i.ready || 0))) : null,
@@ -362,8 +382,17 @@
   }
   const settingsOut = (s) => {
     const x = s.settings;
-    return { cook_minutes: x.cook_minutes, receipt_header: x.receipt_header, receipt_footer: x.receipt_footer, printer_mode: x.printer_mode, printer_host: x.printer_host, printer_port: x.printer_port, printer_codepage: x.printer_codepage, printer_width: x.printer_width, unsynced: !!x.unsynced };
+    return {
+      cook_minutes: x.cook_minutes, receipt_header: x.receipt_header, receipt_footer: x.receipt_footer, printer_mode: x.printer_mode, printer_host: x.printer_host,
+      printer_port: x.printer_port, printer_codepage: x.printer_codepage, printer_width: x.printer_width,
+      terminal_enabled: !!x.terminal_enabled, terminal_host: x.terminal_host || null, terminal_port: x.terminal_port || null, terminal_test: !!x.terminal_test, unsynced: !!x.unsynced,
+    };
   };
+  const termOut = (p) => ({
+    id: p.id, order_id: p.order_id, amount: p.amount, status: p.status, status_name: TERM_NAMES[p.status], message: p.message || null,
+    reference: p.reference || null, auth_code: p.auth_code || null, card: p.card || null, test: p.driver === 'emulator',
+    created_at: iso(p.created), finished_at: iso(p.finished),
+  });
   const jobOut = (j, withDoc) => Object.assign({
     id: j.id, kind: j.kind, kind_name: KIND_NAMES[j.kind], title: j.title, status: j.status, attempts: j.attempts, last_error: j.last_error,
     next_attempt_at: iso(j.status === 'pending' ? j.next : null), printed_at: iso(j.printed), printed_via: j.via, created_at: iso(j.created),
@@ -383,9 +412,9 @@
   }
   function kitchenDoc(s, o, t, items, reprint) {
     const r = receipt(s.settings.printer_width);
-    r.text('КУХНЯ', 'center', 'l', true).text(t.batch > 1 ? 'ДОЗАКАЗ К №' + o.number : 'ЗАКАЗ №' + o.number, 'center', 'l', true).text('СТОЛ ' + o.table_name, 'center', 'l', true);
+    r.text('КУХНЯ', 'center', 'l', true).text(t.batch > 1 ? 'ДОЗАКАЗ К №' + o.number : 'ЗАКАЗ №' + o.number, 'center', 'l', true).text(placeOf(o).toUpperCase(), 'center', 'l', true, o.type === 'takeaway');
     if (o.guests) r.text('Гостей: ' + o.guests, 'center');
-    r.rule().row('Официант', empName(s, t.employee_id) || o.waiter_name || '').row('Отправлен', dmyhm(t.sent));
+    r.rule().row(o.type === 'takeaway' ? 'Кассир' : 'Официант', empName(s, t.employee_id) || o.waiter_name || '').row('Отправлен', dmyhm(t.sent));
     if (reprint) r.text('ПОВТОРНАЯ ПЕЧАТЬ · ' + hm(now()), 'center', 'n', true, true);
     r.rule('=');
     items.forEach((i) => {
@@ -398,7 +427,7 @@
   }
   function cancelDoc(s, o, items, by, reason) {
     const r = receipt(s.settings.printer_width);
-    r.text('ОТМЕНА', 'center', 'l', true, true).text('ЗАКАЗ №' + o.number, 'center', 'l', true).text('СТОЛ ' + o.table_name, 'center', 'l', true)
+    r.text('ОТМЕНА', 'center', 'l', true, true).text('ЗАКАЗ №' + o.number, 'center', 'l', true).text(placeOf(o).toUpperCase(), 'center', 'l', true)
       .rule().row('Отменил', by).row('Время', dmyhm(now())).rule('=').text('НЕ ГОТОВИТЬ:', 'left', 'n', true);
     items.forEach((i) => r.text(i.qty + ' × ' + i.name, 'left', 't', true));
     r.rule('=');
@@ -412,7 +441,7 @@
     if (s.settings.receipt_header) r.text(s.settings.receipt_header, 'center');
     const first = (o.waiter_name || '').trim().split(/\s+/)[0] || '—';
     r.rule().row('Счёт № ' + o.number, dmyhm(o.paid || o.bill || now()))
-      .row('Стол ' + o.table_name + (o.guests ? ' · гостей ' + o.guests : ''), 'Официант: ' + first).rule();
+      .row(placeOf(o) + (o.guests ? ' · гостей ' + o.guests : ''), (o.type === 'takeaway' ? 'Кассир: ' : 'Официант: ') + first).rule();
     const lines = new Map();
     active(itemsOf(s, o)).sort(byId).forEach((i) => {
       const k = i.name + '|' + i.price;
@@ -425,7 +454,7 @@
       r.text(l.name).row('   ' + l.qty + ' × ' + money(l.price), money(l.qty * l.price));
     });
     r.rule('=').row('ИТОГО', money(total), 't', true);
-    if (o.status === 'paid') {
+    if (isPaid(o)) {
       r.row('Оплата', o.payment === 'cash' ? 'наличные' : 'карта');
       if (o.payment === 'cash' && o.received) r.row('Получено', money(o.received)).row('Сдача', money(o.change));
     }
@@ -471,11 +500,11 @@
   function printKitchen(s, o, t, reprint) {
     const items = s.items.filter((i) => i.ticket_id === t.id && i.status !== 'cancelled').sort(byId);
     if (!items.length) return null;
-    const title = (t.batch > 1 ? 'Дозаказ к №' : 'Заказ №') + o.number + ' · стол ' + o.table_name + (reprint ? ' (повторно)' : '');
+    const title = (t.batch > 1 ? 'Дозаказ к №' : 'Заказ №') + o.number + ' · ' + placeOf(o).toLowerCase() + (reprint ? ' (повторно)' : '');
     return enqueue(s, 'kitchen', title, kitchenDoc(s, o, t, items, reprint), o.id, t.id);
   }
   function printCancel(s, o, items, by, reason) {
-    if (items.length) enqueue(s, 'cancel', 'Отмена · заказ №' + o.number + ' · стол ' + o.table_name, cancelDoc(s, o, items, by.name, reason), o.id);
+    if (items.length) enqueue(s, 'cancel', 'Отмена · заказ №' + o.number + ' · ' + placeOf(o).toLowerCase(), cancelDoc(s, o, items, by.name, reason), o.id);
   }
 
   // ---------------------------------------------------------------- доступ
@@ -544,16 +573,115 @@
     return t ? s.orders.find((o) => o.id === t.order_id) : null;
   }
 
-  const waiter = {
+  // ---------------------------------------------------------------- зал: официант и кассир (как WaiterController и CashierController)
+  // навынос, оплаченный заранее, закрывается, когда всё выдано
+  function closeIfDone(o, by) {
+    if (o.type === 'takeaway' && o.sale_number && o.status === 'served') { o.status = 'paid'; o.closed_by = o.closed_by || (by && by.id) || null; }
+  }
+  const pendingTerm = (s, o, except) => (s.payments || []).find((p) => p.order_id === o.id && p.status === 'pending' && p !== except);
+  function noTerminal(s, o, except) {
+    if (pendingTerm(s, o, except)) invalid('terminal', 'Идёт оплата на терминале — дождитесь результата или отмените её на экране оплаты');
+  }
+  function changeable(s, o) {
+    if (isPaid(o)) invalid('order', 'Заказ №' + o.number + ' уже оплачен — отменить нельзя. Возврат денег оформляет администратор в «Кассе и складе»');
+    noTerminal(s, o);
+  }
+  // сумма к оплате; у заказа столика ничего не должно готовиться
+  function payable(s, o) {
+    if (!OPEN.includes(o.status) || isPaid(o)) fail(409, 'Заказ №' + o.number + ' уже ' + (o.status === 'cancelled' ? 'отменён' : 'оплачен'), { order_id: o.id });
+    const list = active(itemsOf(s, o));
+    if (!list.length) invalid('items', 'В заказе нет блюд к оплате');
+    const cooking = list.filter((i) => i.status === 'new' || i.status === 'cooking');
+    if (o.type !== 'takeaway' && cooking.length) invalid('items', 'Ещё готовятся: ' + [...new Set(cooking.map((i) => i.name))].join(', ') + '. Отметьте «Готово», когда кухня отдаст блюда, или отмените эти позиции');
+    return sum(list, (i) => i.qty * i.price);
+  }
+  function createOrder(s, c, attrs, list, comment) {
+    const o = Object.assign({
+      id: ++s.seq.order, number: s.seq.order, type: 'table', table_id: null, table_name: null, waiter_id: c.me.id, waiter_name: c.me.name,
+      guests: null, comment, status: 'new', total: 0, payment: null, received: null, change: 0, sale_number: null, closed_by: null,
+      created: now(), bill: null, paid: null, cancelled: null, cancel_reason: null, synced: null,
+    }, attrs);
+    s.orders.push(o);
+    const t = send(s, o, c.me, 1, list, comment, c.body.client_uuid);
+    refreshStatus(s, o);
+    printKitchen(s, o, t, false);
+    c.status = 201;
+    return { order: orderOut(s, o), replay: false };
+  }
+  function setStatus(s, o, by, to, ticketId, itemIds) {
+    if (!['new', 'cooking', 'ready', 'served'].includes(to)) invalid('status', 'Недопустимое значение поля «статус»');
+    if (!itemIds && to === 'new') invalid('status', 'Вернуть в «новые» можно только отдельные позиции');
+    const from = { cooking: ['new'], ready: ['new', 'cooking'], served: ['ready'] }[to];
+    const items = itemsOf(s, o).filter((i) => ON_BOARD.includes(i.status) && (!ticketId || i.ticket_id === ticketId)
+      && (itemIds ? itemIds.includes(i.id) : from.includes(i.status)));
+    if (!items.length) invalid('status', to === 'served' ? 'Нет готовых блюд — сначала отметьте «Готово»' : 'Нет блюд, которые можно отметить «' + ITEM_NAMES[to] + '»');
+    items.forEach((i) => move(i, to));
+    refreshStatus(s, o);
+    closeIfDone(o, by);
+  }
+  function handOut(s, o, by) {
+    if (o.type !== 'takeaway') invalid('order', 'Это заказ столика — отметьте «Подано»');
+    const list = active(itemsOf(s, o));
+    const cooking = list.filter((i) => i.status === 'new' || i.status === 'cooking');
+    if (cooking.length) invalid('items', 'Ещё не готово: ' + [...new Set(cooking.map((i) => i.name))].join(', ') + '. Отметьте «Готово», когда кухня отдаст заказ');
+    list.filter((i) => i.status === 'ready').forEach((i) => move(i, 'served'));
+    refreshStatus(s, o);
+    closeIfDone(o, by);
+  }
+  // оплата: продажа кассы; стол — закрывается, навынос — закрывается, когда всё выдано
+  function payOrder(s, o, by, payment, received, terminal) {
+    noTerminal(s, o, terminal);
+    const total = payable(s, o);
+    if (terminal && terminal.amount !== total) invalid('total', 'Сумма заказа изменилась, пока шла оплата на терминале');
+    let change = 0;
+    if (payment === 'cash') {
+      received = received || total;
+      if (received < total) invalid('received', 'Получено меньше суммы счёта');
+      change = received - total;
+    } else received = null;
+    if (o.type !== 'takeaway') active(itemsOf(s, o)).filter((i) => i.status === 'ready').forEach((i) => move(i, 'served'));
+    Object.assign(o, { total, payment, received, change, sale_number: ++s.seq.sale, paid: now(), bill: o.bill || now() });
+    if (o.type === 'takeaway') { refreshStatus(s, o); closeIfDone(o, by); } else Object.assign(o, { status: 'paid', closed_by: by.id });
+  }
+
+  // ---------------------------------------------------------------- терминал кассы: эмулятор (тестовый режим)
+  function termFinish(s, p, status, message, extra) {
+    Object.assign(p, { status, message, finished: now() }, extra || {});
+  }
+  function termApply(s, p) {
+    if (p.status !== 'pending') return;
+    const o = s.orders.find((x) => x.id === p.order_id);
+    if (p.outcome === 'approved') {
+      try {
+        payOrder(s, o, s.staff.find((e) => e.id === p.employee_id) || { id: null, name: '' }, 'card', null, p);
+        termFinish(s, p, 'approved', 'Оплачено (эмулятор терминала)', { reference: String(100000000000 + p.id), auth_code: String((p.id * 7919) % 1000000).padStart(6, '0'), card: '•••• 4242' });
+      } catch (e) {
+        if (!(e instanceof Http)) throw e;
+        termFinish(s, p, 'error', 'Терминал подтвердил оплату, но заказ не закрыт: ' + e.data.message + '. Обратитесь к администратору');
+      }
+    } else if (p.outcome === 'declined') {
+      termFinish(s, p, 'declined', 'Отказ банка: недостаточно средств (эмулятор терминала)');
+    }
+  }
+  const termResponse = (s, p) => ({ payment: termOut(p), order: orderOut(s, s.orders.find((o) => o.id === p.order_id)), poll_ms: 1500 });
+  const paymentOf = (s, c) => (s.payments || []).find((p) => p.id === Number(c.params[0])) || fail(404, 'Не найдено');
+
+  const floor = {
     state(s) {
+      const all = s.orders.filter((o) => OPEN.includes(o.status)).sort(byId);
       const open = {};
-      s.orders.filter((o) => OPEN.includes(o.status)).sort(byId).forEach((o) => { open[o.table_id] = o; });
+      all.filter((o) => o.type !== 'takeaway').forEach((o) => { open[o.table_id] = o; });
       const tables = s.tables.filter((t) => t.active && !t.deleted).sort(bySort);
       const ids = new Set(tables.map((t) => t.id));
       return {
-        server_time: iso(now()), mode: 'local', printer_mode: s.settings.printer_mode, menu_version: menuVersion(s),
+        server_time: iso(now()), mode: 'local', printer_mode: s.settings.printer_mode,
+        terminal: { enabled: !!s.settings.terminal_enabled, test: !!s.settings.terminal_test },
+        menu_version: menuVersion(s),
         tables: tables.map((t) => tableOut(s, t, open[t.id])),
         orphans: Object.values(open).filter((o) => !ids.has(o.table_id)).map((o) => summaryOut(s, o)),
+        takeaway: all.filter((o) => o.type === 'takeaway').map((o) => Object.assign(summaryOut(s, o), {
+          lines: active(itemsOf(s, o)).sort(byId).map((i) => ({ name: i.name, qty: i.qty, status: i.status })),
+        })),
       };
     },
     menu(s) {
@@ -573,20 +701,18 @@
       if (again) return { order: orderOut(s, again), replay: true };
       const table = s.tables.find((t) => t.id === tableId && !t.deleted) || fail(404, 'Столик не найден — обновите схему зала');
       if (!table.active) invalid('table_id', 'Столик недоступен — обновите схему зала');
-      const busy = s.orders.find((o) => o.table_id === table.id && OPEN.includes(o.status));
+      const busy = s.orders.find((o) => o.table_id === table.id && o.type !== 'takeaway' && OPEN.includes(o.status));
       if (busy) fail(409, 'На столике ' + table.name + ' уже открыт заказ №' + busy.number + ' — добавьте блюда в него', { order_id: busy.id });
       dishes(s, list);
-      const o = {
-        id: ++s.seq.order, number: s.seq.order, table_id: table.id, table_name: table.name, waiter_id: c.me.id, waiter_name: c.me.name,
-        guests: guests || null, comment, status: 'new', total: 0, payment: null, received: null, change: 0, sale_number: null, closed_by: null,
-        created: now(), bill: null, paid: null, cancelled: null, cancel_reason: null, synced: null,
-      };
-      s.orders.push(o);
-      const t = send(s, o, c.me, 1, list, comment, c.body.client_uuid);
-      refreshStatus(s, o);
-      printKitchen(s, o, t, false);
-      c.status = 201;
-      return { order: orderOut(s, o), replay: false };
+      return createOrder(s, c, { type: 'table', table_id: table.id, table_name: table.name, guests: guests || null }, list, comment);
+    },
+    takeaway(s, c) {
+      const list = lines(c.body);
+      const comment = text(c.body, 'comment', 'комментарий', 200, false);
+      const again = replay(s, c.body.client_uuid);
+      if (again) return { order: orderOut(s, again), replay: true };
+      dishes(s, list);
+      return createOrder(s, c, { type: 'takeaway' }, list, comment);
     },
     add(s, c) {
       const list = lines(c.body);
@@ -594,6 +720,8 @@
       const again = replay(s, c.body.client_uuid);
       if (again) return { order: orderOut(s, again), replay: true };
       const o = openOrder(s, c.params[0]);
+      if (isPaid(o)) invalid('items', 'Заказ №' + o.number + ' уже оплачен — оформите новый заказ');
+      noTerminal(s, o);
       dishes(s, list);
       const batch = Math.max(0, ...s.tickets.filter((t) => t.order_id === o.id).map((t) => t.batch)) + 1;
       const t = send(s, o, c.me, batch, list, comment, c.body.client_uuid);
@@ -603,12 +731,31 @@
       c.status = 201;
       return { order: orderOut(s, o), replay: false };
     },
+    status(s, c) {
+      const o = openOrder(s, c.params[0]);
+      const ids = Array.isArray(c.body.item_ids) ? c.body.item_ids.map(Number) : null;
+      setStatus(s, o, c.me, c.body.status, c.body.ticket_id ? Number(c.body.ticket_id) : null, ids);
+      return { order: orderOut(s, o) };
+    },
     serve(s, c) {
       const o = openOrder(s, c.params[0]);
       const only = Array.isArray(c.body.item_ids) ? c.body.item_ids.map(Number) : null;
       itemsOf(s, o).filter((i) => i.status === 'ready' && (!only || only.includes(i.id))).forEach((i) => move(i, 'served'));
       refreshStatus(s, o);
+      closeIfDone(o, c.me);
       return { order: orderOut(s, o) };
+    },
+    handout(s, c) {
+      const o = openOrder(s, c.params[0]);
+      handOut(s, o, c.me);
+      return { order: orderOut(s, o) };
+    },
+    reprint(s, c) {
+      const o = s.orders.find((x) => x.id === Number(c.params[0])) || fail(404, 'Заказ не найден');
+      const t = s.tickets.find((x) => x.id === Number(c.params[1]) && x.order_id === o.id) || fail(404, 'Отправка не из этого заказа');
+      if (!printing(s)) invalid('printer', 'Печать выключена — включите принтер в админке: Настройки → Принтер');
+      printKitchen(s, o, t, true);
+      return { ok: true };
     },
     bill(s, c) {
       const o = openOrder(s, c.params[0]);
@@ -616,35 +763,25 @@
       o.bill = o.bill || now();
       const doc = guestDoc(s, o);
       const print = c.body.print !== false;
-      if (print) enqueue(s, 'guest', 'Счёт №' + o.number + ' · стол ' + o.table_name, doc, o.id);
+      if (print) enqueue(s, 'guest', 'Счёт №' + o.number + ' · ' + placeOf(o).toLowerCase(), doc, o.id);
       return { order: orderOut(s, o), receipt: doc, printer_mode: s.settings.printer_mode, printed: print && s.settings.printer_mode !== 'off' };
     },
     receipt(s, c) { return { receipt: guestDoc(s, s.orders.find((o) => o.id === Number(c.params[0])) || fail(404, 'Заказ не найден')) }; },
     pay(s, c) {
       const payment = c.body.payment;
       if (!['cash', 'card'].includes(payment)) invalid('payment', payment ? 'Недопустимое значение поля «способ оплаты»' : 'Заполните поле «способ оплаты»');
-      let received = number(c.body, 'received', 'получено', 0, 1e11, false, null);
+      if (c.app === 'cashier' && payment === 'card' && s.settings.terminal_enabled) invalid('payment', 'Карта принимается через терминал: нажмите «Отправить на терминал»');
+      const received = number(c.body, 'received', 'получено', 0, 1e11, false, null);
       const o = s.orders.find((x) => x.id === Number(c.params[0])) || fail(404, 'Заказ не найден');
-      if (o.status === 'paid') return { order: orderOut(s, o), replay: true };
+      if (isPaid(o)) return { order: orderOut(s, o), replay: true };
       if (o.status === 'cancelled') fail(409, 'Заказ №' + o.number + ' отменён', { order_id: o.id });
-      const list = active(itemsOf(s, o));
-      if (!list.length) invalid('items', 'В заказе нет блюд к оплате');
-      const cooking = list.filter((i) => i.status === 'new' || i.status === 'cooking');
-      if (cooking.length) invalid('items', 'Ещё готовятся: ' + [...new Set(cooking.map((i) => i.name))].join(', ') + '. Дождитесь «Готово» на кухне или отмените эти позиции');
-      const total = sum(list, (i) => i.qty * i.price);
-      let change = 0;
-      if (payment === 'cash') {
-        received = received || total;
-        if (received < total) invalid('received', 'Получено меньше суммы счёта');
-        change = received - total;
-      } else received = null;
-      list.filter((i) => i.status === 'ready').forEach((i) => move(i, 'served'));
-      Object.assign(o, { status: 'paid', total, payment, received, change, sale_number: ++s.seq.sale, closed_by: c.me.id, paid: now(), bill: o.bill || now() });
+      payOrder(s, o, c.me, payment, received, null);
       return { order: orderOut(s, o), replay: false };
     },
     cancel(s, c) {
       const reason = text(c.body, 'reason', 'причина', 100, false);
       const o = openOrder(s, c.params[0]);
+      changeable(s, o);
       const list = active(itemsOf(s, o));
       if (list.some((i) => i.status !== 'new') && !manager(c.me)) invalid('order', 'Часть блюд уже готовится или подана — отменить заказ может администратор');
       const toKitchen = list.filter((i) => ON_BOARD.includes(i.status)).map((i) => Object.assign({}, i));
@@ -658,6 +795,7 @@
       const item = s.items.find((i) => i.id === Number(c.params[1])) || fail(404, 'Позиция не найдена');
       if (item.order_id !== Number(c.params[0])) fail(404, 'Позиция не из этого заказа');
       const o = openOrder(s, c.params[0]);
+      changeable(s, o);
       if (item.status === 'cancelled') invalid('item', 'Позиция уже отменена');
       if (item.status !== 'new' && !manager(c.me)) invalid('item', 'Кухня уже начала «' + item.name + '» — отменить может администратор');
       const toKitchen = ON_BOARD.includes(item.status) ? [Object.assign({}, item)] : [];
@@ -665,6 +803,35 @@
       refreshStatus(s, o);
       printCancel(s, o, toKitchen, c.me, reason);
       return { order: orderOut(s, o) };
+    },
+    // терминал: «Отправить на терминал» → ожидание → оплачено / отклонено / отмена
+    terminalStart(s, c) {
+      if (!s.settings.terminal_enabled) invalid('terminal', 'Терминал выключен — включите его в админке: Настройки → Платёжный терминал');
+      const o = s.orders.find((x) => x.id === Number(c.params[0])) || fail(404, 'Заказ не найден');
+      const pending = pendingTerm(s, o);
+      if (pending) return termResponse(s, pending);
+      const amount = payable(s, o);
+      s.payments = s.payments || [];
+      const p = { id: ++s.seq.payment, order_id: o.id, employee_id: c.me.id, amount, driver: s.settings.terminal_test ? 'emulator' : 'json', status: 'pending', message: null, created: now(), finished: null, outcome: null };
+      s.payments.push(p);
+      if (p.driver !== 'emulator') termFinish(s, p, 'error', 'Терминал ' + (s.settings.terminal_host || '') + ':' + (s.settings.terminal_port || '') + ' недоступен (в демо настоящего терминала нет — включите тестовый режим)');
+      c.status = 201;
+      return termResponse(s, p);
+    },
+    terminalShow(s, c) { const p = paymentOf(s, c); termApply(s, p); return termResponse(s, p); },
+    terminalCancel(s, c) {
+      const p = paymentOf(s, c);
+      termApply(s, p);
+      if (p.status === 'pending') termFinish(s, p, 'cancelled', 'Оплата отменена на кассе');
+      return termResponse(s, p);
+    },
+    terminalEmulate(s, c) {
+      const p = paymentOf(s, c);
+      if (p.driver !== 'emulator') invalid('terminal', 'Имитация доступна только в тестовом режиме терминала');
+      if (!['approved', 'declined'].includes(c.body.result)) invalid('result', 'Недопустимое значение поля «исход»');
+      if (p.status === 'pending') p.outcome = c.body.result;
+      termApply(s, p);
+      return termResponse(s, p);
     },
   };
 
@@ -675,17 +842,7 @@
     return (h >>> 0).toString(16);
   }
 
-  // ---------------------------------------------------------------- кухня
-  function ticketOf(s, id) {
-    const t = s.tickets.find((x) => x.id === Number(id)) || fail(404, 'Не найдено');
-    return [t, openOrder(s, t.order_id)];
-  }
-  function moveTicket(s, c, from, to) {
-    const [t, o] = ticketOf(s, c.params[0]);
-    s.items.filter((i) => i.ticket_id === t.id && from.includes(i.status)).forEach((i) => move(i, to));
-    refreshStatus(s, o);
-    return { ok: true, order_status: o.status };
-  }
+  // ---------------------------------------------------------------- кухня: только доска и печать из браузера
   const kitchen = {
     board(s) {
       const onBoard = new Set(s.items.filter((i) => ON_BOARD.includes(i.status) && i.ticket_id).map((i) => i.ticket_id));
@@ -696,7 +853,7 @@
         .filter((card) => ['new', 'cooking', 'ready'].includes(card.column));
       const cancelled = s.items.filter((i) => i.status === 'cancelled' && i.sent && i.cancelled >= now() - 10 * MIN)
         .sort((a, b) => b.cancelled - a.cancelled).slice(0, 20)
-        .map((i) => { const o = s.orders.find((x) => x.id === i.order_id); return { id: i.id, number: o.number, table_name: o.table_name, name: i.name, qty: i.qty, at: iso(i.cancelled) }; });
+        .map((i) => { const o = s.orders.find((x) => x.id === i.order_id); return { id: i.id, number: o.number, place: placeOf(o).toLowerCase(), table_name: o.table_name, name: i.name, qty: i.qty, at: iso(i.cancelled) }; });
       const network = s.settings.printer_mode === 'network';
       const problem = network ? s.jobs.filter((j) => (j.status === 'pending' || j.status === 'failed') && j.last_error).sort(byId).pop() : null;
       return {
@@ -710,32 +867,12 @@
         } : null,
       };
     },
-    start: (s, c) => moveTicket(s, c, ['new'], 'cooking'),
-    ready: (s, c) => moveTicket(s, c, ['new', 'cooking'], 'ready'),
-    served: (s, c) => moveTicket(s, c, ['ready'], 'served'),
-    item(s, c) {
-      const to = c.body.status;
-      if (!['new', 'cooking', 'ready'].includes(to)) invalid('status', 'Недопустимое значение поля «статус»');
-      const item = s.items.find((i) => i.id === Number(c.params[0])) || fail(404, 'Не найдено');
-      const o = openOrder(s, item.order_id);
-      if (!ON_BOARD.includes(item.status)) invalid('status', item.status === 'cancelled' ? 'Позиция отменена' : 'Позиция уже подана');
-      move(item, to);
-      refreshStatus(s, o);
-      return { ok: true, order_status: o.status };
-    },
-    reprint(s, c) {
-      if (!printing(s)) invalid('printer', 'Печать выключена — включите принтер в админке: Настройки → Принтер');
-      const [t, o] = ticketOf(s, c.params[0]);
-      printKitchen(s, o, t, true);
-      return { ok: true };
-    },
     claim(s, c) {
       const j = s.jobs.find((x) => x.id === Number(c.params[0])) || fail(404, 'Не найдено');
       if (j.status !== 'pending') fail(409, 'Этот чек уже напечатан другим экраном');
       Object.assign(j, { status: 'done', printed: now(), via: 'browser', attempts: j.attempts + 1 });
       return { job: jobOut(j, true) };
     },
-    menu(s) { return { dishes: s.dishes.filter((d) => d.active && !d.deleted).sort(byName).map(dishOut) }; },
     stop(s, c) {
       if (c.body.stop === undefined || c.body.stop === null) invalid('stop', 'Заполните поле «стоп-лист»');
       const d = findOr404(s.dishes, c.params[0]);
@@ -748,7 +885,8 @@
   // ---------------------------------------------------------------- отчёты (как RestaurantReportService.php)
   function report(s, from, to) {
     const end = addDays(to, 1);
-    const paid = s.orders.filter((o) => o.status === 'paid' && o.paid >= from && o.paid < end);
+    // оплаченные (и оплаченные заранее навынос) — по дате оплаты
+    const paid = s.orders.filter((o) => o.status !== 'cancelled' && o.paid && o.paid >= from && o.paid < end);
     const revenue = sum(paid, (o) => o.total);
     const days = new Map();
     for (let d = from; d <= to; d = addDays(d, 1)) days.set(ymd(d), { day: ymd(d), revenue: 0, orders: 0 });
@@ -756,14 +894,15 @@
     const group = (key, nameKey, fallback) => {
       const groups = new Map();
       paid.forEach((o) => {
-        const k = o[key] !== null && o[key] !== undefined ? o[key] : 'none:' + o[nameKey];
+        const k = key === 'table_id' && o.type === 'takeaway' ? 'takeaway' : o[key] !== null && o[key] !== undefined ? o[key] : 'none:' + o[nameKey];
         if (!groups.has(k)) groups.set(k, []);
         groups.get(k).push(o);
       });
       return [...groups.values()].map((g) => {
         const rev = sum(g, (o) => o.total);
         const latest = g.slice().sort((a, b) => b.paid - a.paid)[0];
-        return { id: g[0][key], name: latest[nameKey] || fallback, revenue: rev, orders: g.length, avg: Math.round(rev / g.length) };
+        const name = key === 'table_id' && latest.type === 'takeaway' ? 'Навынос' : latest[nameKey] || fallback;
+        return { id: g[0][key], name, revenue: rev, orders: g.length, avg: Math.round(rev / g.length) };
       }).sort((a, b) => b.revenue - a.revenue);
     };
     const ids = new Set(paid.map((o) => o.id));
@@ -794,7 +933,7 @@
     const master = [...s.categories, ...s.dishes, ...s.tables, ...s.staff].filter((x) => x.unsynced).length + (s.settings.unsynced ? 1 : 0);
     return {
       orders: s.orders.filter((o) => FINAL.includes(o.status) && !o.synced).length,
-      sales: s.orders.filter((o) => o.status === 'paid' && !o.synced).length,
+      sales: s.orders.filter((o) => o.sale_number && !o.saleSynced).length,
       stock: 0,
       menu: master,
     };
@@ -824,6 +963,7 @@
       return log;
     }
     s.orders.filter((o) => FINAL.includes(o.status) && !o.synced).forEach((o) => { o.synced = started; });
+    s.orders.filter((o) => o.sale_number).forEach((o) => { o.saleSynced = true; });
     [...s.categories, ...s.dishes, ...s.tables, ...s.staff].forEach((x) => { x.unsynced = false; });
     s.settings.unsynced = false;
     const log = { id: ++s.seq.log, direction: 'sync', trigger, status: 'ok', started, finished: started + 1200, error: null,
@@ -842,7 +982,8 @@
       const problem = s.jobs.filter((j) => (j.status === 'pending' || j.status === 'failed') && j.last_error).sort(byId).pop();
       return {
         today: report(s, today(), today()).summary,
-        tables: { total: s.tables.filter((t) => t.active && !t.deleted).length, busy: new Set(open.map((o) => o.table_id)).size, bill: open.filter((o) => o.bill).length },
+        tables: { total: s.tables.filter((t) => t.active && !t.deleted).length, busy: new Set(open.filter((o) => o.type !== 'takeaway').map((o) => o.table_id)).size, bill: open.filter((o) => o.type !== 'takeaway' && o.bill).length },
+        takeaway: { open: open.filter((o) => o.type === 'takeaway').length, ready: open.filter((o) => o.type === 'takeaway' && o.status === 'ready').length },
         kitchen: { new: qty('new'), cooking: qty('cooking'), ready: qty('ready') },
         open_orders: open.map((o) => summaryOut(s, o)),
         printer: {
@@ -863,6 +1004,9 @@
       return { orders: list.slice(0, 300).map((o) => summaryOut(s, o)) };
     },
     order(s, c) { return { order: orderOut(s, s.orders.find((o) => o.id === Number(c.params[0])) || fail(404, 'Заказ не найден')) }; },
+    status: (s, c) => floor.status(s, c),
+    handout: (s, c) => floor.handout(s, c),
+    reprint: (s, c) => floor.reprint(s, c),
     menu(s) {
       return {
         categories: s.categories.filter((x) => !x.deleted).sort((a, b) => a.sort - b.sort || byName(a, b))
@@ -936,8 +1080,8 @@
       return { ok: true };
     },
     staff(s) {
-      const rank = { owner: 0, admin: 1, waiter: 2, cook: 3 };
-      return { staff: s.staff.slice().sort((a, b) => (b.active - a.active) || ((rank[a.role] ?? 4) - (rank[b.role] ?? 4)) || byName(a, b)).map(staffOut) };
+      const rank = { owner: 0, admin: 1, cashier: 2, waiter: 3, cook: 4 };
+      return { staff: s.staff.slice().sort((a, b) => (b.active - a.active) || ((rank[a.role] ?? 5) - (rank[b.role] ?? 5)) || byName(a, b)).map(staffOut) };
     },
     saveStaff(s, c) {
       const current = c.params[0] ? s.staff.find((e) => e.id === Number(c.params[0])) || fail(404, 'Не найдено') : null;
@@ -972,7 +1116,24 @@
       if ((to - from) / (24 * HOUR) >= 366) invalid('from', 'Период — не больше года');
       return report(s, from, to);
     },
-    settings(s) { return { store: storeOut(s), settings: settingsOut(s), codepages: ['cp866', 'cp1251'], widths: [48, 42, 32] }; },
+    settings(s) { return { store: storeOut(s), settings: settingsOut(s), codepages: ['cp866', 'cp1251'], widths: [48, 42, 32], terminal_driver: 'json' }; },
+    saveTerminal(s, c) {
+      const enabled = bool(c.body.terminal_enabled, false);
+      const test = bool(c.body.terminal_test, false);
+      const host = str(c.body.terminal_host);
+      if (host && !/^[A-Za-z0-9.\-:]+$/.test(host)) invalid('terminal_host', 'Недопустимое значение поля «адрес терминала»');
+      const port = number(c.body, 'terminal_port', 'порт терминала', 1, 65535, false, null);
+      if (enabled && !test && (!host || !port)) invalid('terminal_host', 'Укажите адрес и порт терминала в локальной сети, например 192.168.1.60 и 8888, или включите тестовый режим');
+      if (!enabled && (s.payments || []).some((p) => p.status === 'pending')) invalid('terminal_enabled', 'Сейчас идёт оплата на терминале — дождитесь её окончания');
+      Object.assign(s.settings, { terminal_enabled: enabled, terminal_test: test, terminal_host: host || null, terminal_port: port });
+      return admin.settings(s);
+    },
+    testTerminal(s, c) {
+      if (!s.settings.terminal_enabled) invalid('terminal_enabled', 'Терминал выключен — включите его и сохраните настройки');
+      if (s.settings.terminal_test) return { ok: true, message: 'Тестовый режим: работает эмулятор терминала — оплата и отказ имитируются, деньги не списываются' };
+      c.status = 422;
+      return { ok: false, message: 'Терминал ' + s.settings.terminal_host + ':' + s.settings.terminal_port + ' недоступен — в демо-версии настоящего терминала нет, включите тестовый режим' };
+    },
     saveRestaurant(s, c) {
       const name = text(c.body, 'name', 'название', 60, true);
       const address = text(c.body, 'address', 'адрес', 120, false);
@@ -1044,8 +1205,8 @@
   const auth0 = {
     options(s, c) {
       const app = c.query.app;
-      if (!['admin', 'waiter', 'kitchen'].includes(app)) invalid('app', 'Недопустимое значение поля «приложение»');
-      const homeRole = { admin: 'admin', waiter: 'waiter', kitchen: 'cook' }[app];
+      if (!APPS.includes(app)) invalid('app', 'Недопустимое значение поля «приложение»');
+      const homeRole = HOME_ROLE[app];
       const rank = (e) => (e.role === homeRole ? 0 : e.role === 'admin' ? 1 : 2);
       return {
         app, mode: 'local', store: storeOut(s), stores: [{ id: s.store.id, name: s.store.name }], needs_setup: false,
@@ -1059,7 +1220,7 @@
       if (!pin) invalid('pin', 'Заполните поле «PIN»');
       if (!/^\d{4,6}$/.test(pin)) invalid('pin', 'PIN — от 4 до 6 цифр');
       const app = c.body.app;
-      if (!['admin', 'waiter', 'kitchen'].includes(app)) invalid('app', 'Недопустимое значение поля «приложение»');
+      if (!APPS.includes(app)) invalid('app', 'Недопустимое значение поля «приложение»');
       const e = s.staff.find((x) => x.id === Number(c.body.employee_id) && x.active);
       if (!e || e.pin !== pin) invalid('pin', 'Неверный PIN');
       const token = randomToken();
@@ -1070,11 +1231,12 @@
     logout(s, c) { delete s.tokens[c.token]; return { ok: true }; },
     me(s, c) {
       const e = c.me;
-      const apps = ['admin', 'waiter', 'kitchen', 'kassa'].filter((a) => ACCESS[a].includes(e.role)).map((a) => ({ app: a, url: URLS[a], name: APP_NAMES[a] }));
+      const apps = APPS.concat('kassa').filter((a) => ACCESS[a].includes(e.role)).map((a) => ({ app: a, url: URLS[a], name: APP_NAMES[a] }));
       const sync = syncSummary(s);
       return {
         employee: staffOut(e), store: storeOut(s), stores: [storeOut(s)], apps, mode: 'local', mode_name: 'Локальный сервер ресторана (демо)',
-        timezone: timezone(), settings: { cook_minutes: s.settings.cook_minutes, printer_mode: s.settings.printer_mode }, poll_seconds: 5,
+        timezone: timezone(), poll_seconds: 5,
+        settings: { cook_minutes: s.settings.cook_minutes, printer_mode: s.settings.printer_mode, terminal: { enabled: !!s.settings.terminal_enabled, test: !!s.settings.terminal_test } },
         sync_configured: sync.configured, sync_attention: manager(e) ? sync.attention : false,
       };
     },
@@ -1087,29 +1249,35 @@
     R('POST', 'login', auth0.login, 'public'),
     R('POST', 'logout', auth0.logout),
     R('GET', 'me', auth0.me),
-    R('GET', 'waiter/state', waiter.state, 'waiter'),
-    R('GET', 'waiter/menu', waiter.menu, 'waiter'),
-    R('POST', 'waiter/orders', waiter.open, 'waiter'),
-    R('GET', 'waiter/orders/(\\d+)', waiter.show, 'waiter'),
-    R('POST', 'waiter/orders/(\\d+)/items', waiter.add, 'waiter'),
-    R('POST', 'waiter/orders/(\\d+)/items/(\\d+)/cancel', waiter.cancelItem, 'waiter'),
-    R('POST', 'waiter/orders/(\\d+)/serve', waiter.serve, 'waiter'),
-    R('POST', 'waiter/orders/(\\d+)/bill', waiter.bill, 'waiter'),
-    R('GET', 'waiter/orders/(\\d+)/receipt', waiter.receipt, 'waiter'),
-    R('POST', 'waiter/orders/(\\d+)/pay', waiter.pay, 'waiter'),
-    R('POST', 'waiter/orders/(\\d+)/cancel', waiter.cancel, 'waiter'),
+    ...['waiter', 'cashier'].flatMap((app) => [
+      R('GET', app + '/state', floor.state, app),
+      R('GET', app + '/menu', floor.menu, app),
+      R('POST', app + '/orders', floor.open, app),
+      R('GET', app + '/orders/(\\d+)', floor.show, app),
+      R('POST', app + '/orders/(\\d+)/items', floor.add, app),
+      R('POST', app + '/orders/(\\d+)/items/(\\d+)/cancel', floor.cancelItem, app),
+      R('POST', app + '/orders/(\\d+)/status', floor.status, app),
+      R('POST', app + '/orders/(\\d+)/serve', floor.serve, app),
+      R('POST', app + '/orders/(\\d+)/tickets/(\\d+)/reprint', floor.reprint, app),
+      R('POST', app + '/orders/(\\d+)/bill', floor.bill, app),
+      R('GET', app + '/orders/(\\d+)/receipt', floor.receipt, app),
+      R('POST', app + '/orders/(\\d+)/pay', floor.pay, app),
+      R('POST', app + '/orders/(\\d+)/cancel', floor.cancel, app),
+    ]),
+    R('POST', 'cashier/takeaway', floor.takeaway, 'cashier'),
+    R('POST', 'cashier/orders/(\\d+)/handout', floor.handout, 'cashier'),
+    R('POST', 'cashier/orders/(\\d+)/terminal', floor.terminalStart, 'cashier'),
+    R('GET', 'cashier/terminal/(\\d+)', floor.terminalShow, 'cashier'),
+    R('POST', 'cashier/terminal/(\\d+)/cancel', floor.terminalCancel, 'cashier'),
+    R('POST', 'cashier/terminal/(\\d+)/emulate', floor.terminalEmulate, 'cashier'),
     R('GET', 'kitchen/board', kitchen.board, 'kitchen'),
-    R('POST', 'kitchen/tickets/(\\d+)/start', kitchen.start, 'kitchen'),
-    R('POST', 'kitchen/tickets/(\\d+)/ready', kitchen.ready, 'kitchen'),
-    R('POST', 'kitchen/tickets/(\\d+)/served', kitchen.served, 'kitchen'),
-    R('POST', 'kitchen/tickets/(\\d+)/reprint', kitchen.reprint, 'kitchen'),
-    R('POST', 'kitchen/items/(\\d+)/status', kitchen.item, 'kitchen'),
     R('POST', 'kitchen/print-jobs/(\\d+)/claim', kitchen.claim, 'kitchen'),
-    R('GET', 'kitchen/menu', kitchen.menu, 'kitchen'),
-    R('POST', 'kitchen/dishes/(\\d+)/stop', kitchen.stop, 'kitchen'),
     R('GET', 'admin/dashboard', admin.dashboard, 'admin'),
     R('GET', 'admin/orders', admin.orders, 'admin'),
     R('GET', 'admin/orders/(\\d+)', admin.order, 'admin'),
+    R('POST', 'admin/orders/(\\d+)/status', admin.status, 'admin'),
+    R('POST', 'admin/orders/(\\d+)/handout', admin.handout, 'admin'),
+    R('POST', 'admin/orders/(\\d+)/tickets/(\\d+)/reprint', admin.reprint, 'admin'),
     R('GET', 'admin/menu', admin.menu, 'admin'),
     R('POST', 'admin/categories', admin.saveCategory, 'admin'),
     R('PUT', 'admin/categories/(\\d+)', admin.saveCategory, 'admin'),
@@ -1131,6 +1299,8 @@
     R('PUT', 'admin/settings/restaurant', admin.saveRestaurant, 'admin'),
     R('PUT', 'admin/settings/printer', admin.savePrinter, 'admin'),
     R('POST', 'admin/settings/printer/test', admin.testPrint, 'admin'),
+    R('PUT', 'admin/settings/terminal', admin.saveTerminal, 'admin'),
+    R('POST', 'admin/settings/terminal/test', admin.testTerminal, 'admin'),
     R('GET', 'admin/print-jobs', admin.jobs, 'admin'),
     R('POST', 'admin/print-jobs/(\\d+)/retry', admin.retry, 'admin'),
     R('GET', 'admin/sync', admin.sync, 'admin'),
@@ -1158,7 +1328,7 @@
     if (!route) return { status: 404, data: { message: 'Не найдено' } };
 
     const s = load();
-    const ctx = { query: Object.fromEntries(u.searchParams.entries()), body: JSON.parse(JSON.stringify(body || {})), params, token, status: 200, me: null };
+    const ctx = { query: Object.fromEntries(u.searchParams.entries()), body: JSON.parse(JSON.stringify(body || {})), params, token, status: 200, me: null, app: route.gate };
     let changed = false;
     try {
       if (route.gate !== 'public') {
@@ -1180,7 +1350,7 @@
   }
 
   // ---------------------------------------------------------------- управление демо из лаунчера
-  const DEFAULT_LOGIN = { admin: 'admin', waiter: 'waiter', kitchen: 'cook' };
+  const DEFAULT_LOGIN = { admin: 'admin', waiter: 'waiter', cashier: 'cashier', kitchen: 'cook' };
   window.RESTAURANT_DEMO = {
     key: KEY,
     urls: URLS,
@@ -1188,7 +1358,7 @@
     pins: PINS,
     hint: HINT,
     request,
-    /** Приложения лаунчера открываются уже с входом: администратор, официант и повар. */
+    /** Приложения лаунчера открываются уже с входом: администратор, официант, кассир и повар. */
     ensureLogins() {
       const s = load();
       let changed = false;

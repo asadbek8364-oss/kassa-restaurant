@@ -107,7 +107,7 @@ class RoleAccessTest extends TestCase
 
     public function test_each_app_has_its_own_page_layout_and_pwa(): void
     {
-        foreach (['admin' => 'Админка', 'waiter' => 'Официант', 'kitchen' => 'Кухня'] as $app => $short) {
+        foreach (['admin' => 'Админка', 'waiter' => 'Официант', 'cashier' => 'Кассир', 'kitchen' => 'Кухня'] as $app => $short) {
             $this->get('/'.$app)->assertOk()
                 ->assertSee('<body class="app-'.$app.'"', false)
                 ->assertSee('/'.$app.'/manifest.webmanifest', false)
@@ -121,6 +121,11 @@ class RoleAccessTest extends TestCase
             $this->assertStringStartsWith('application/javascript', $sw->headers->get('Content-Type'));
             $this->assertStringContainsString('restoran-'.$app.'-', $sw->getContent());
         }
-        $this->get('/kitchen/manifest.webmanifest')->assertJsonPath('display', 'fullscreen');
+        // кухня — пассивный настенный дисплей: на весь экран, светлая тема, без кнопок
+        $this->get('/kitchen/manifest.webmanifest')->assertJsonPath('display', 'fullscreen')->assertJsonPath('theme_color', '#ffffff');
+        $kitchen = $this->get('/kitchen')->getContent();
+        $layout = substr($kitchen, strpos($kitchen, '<body'), strpos($kitchen, 'id="login"') - strpos($kitchen, '<body'));
+        $this->assertStringNotContainsString('<button', $layout);
+        $this->assertStringNotContainsString('floor.js', $kitchen);
     }
 }

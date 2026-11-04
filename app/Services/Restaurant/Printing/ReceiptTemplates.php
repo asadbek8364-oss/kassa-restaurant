@@ -13,8 +13,8 @@ use Illuminate\Support\Collection;
 /**
  * Шаблоны чеков для ленты 80 мм.
  *
- * - Кухонный чек: номер заказа, столик, официант, время, позиции крупно (количество × название),
- *   комментарии выделены инверсией. Цен и итога нет — это чек для повара.
+ * - Кухонный чек: номер заказа, столик или «НАВЫНОС», официант (кассир), время, позиции крупно
+ *   (количество × название), комментарии выделены инверсией. Цен и итога нет — это чек для повара.
  * - Отмена: какие позиции больше не готовить.
  * - Гостевой счёт: позиции с ценами, итог, оплата.
  */
@@ -26,12 +26,12 @@ class ReceiptTemplates
         $r = new Receipt($settings->printer_width);
         $r->text('КУХНЯ', 'center', 'l', true)
             ->text($ticket->batch > 1 ? "ДОЗАКАЗ К №{$order->number}" : "ЗАКАЗ №{$order->number}", 'center', 'l', true)
-            ->text('СТОЛ '.$order->table_name, 'center', 'l', true);
+            ->text(mb_strtoupper($order->place()), 'center', 'l', true, $order->isTakeaway());
         if ($order->guests) {
             $r->text('Гостей: '.$order->guests, 'center');
         }
         $r->rule()
-            ->row('Официант', $ticket->employee?->name ?? (string) $order->waiter_name)
+            ->row($order->isTakeaway() ? 'Кассир' : 'Официант', $ticket->employee?->name ?? (string) $order->waiter_name)
             ->row('Отправлен', Clock::local($ticket->sent_at)->format('d.m.Y H:i'));
         if ($reprint) {
             $r->text('ПОВТОРНАЯ ПЕЧАТЬ · '.Clock::now()->format('H:i'), 'center', 'n', true, true);
@@ -58,7 +58,7 @@ class ReceiptTemplates
         $r = new Receipt($settings->printer_width);
         $r->text('ОТМЕНА', 'center', 'l', true, true)
             ->text("ЗАКАЗ №{$order->number}", 'center', 'l', true)
-            ->text('СТОЛ '.$order->table_name, 'center', 'l', true)
+            ->text(mb_strtoupper($order->place()), 'center', 'l', true)
             ->rule()
             ->row('Отменил', (string) $by)
             ->row('Время', Clock::now()->format('d.m.Y H:i'))
@@ -88,7 +88,7 @@ class ReceiptTemplates
         $at = $order->paid_at ?? $order->bill_at ?? now();
         $r->rule()
             ->row('Счёт № '.$order->number, Clock::local($at)->format('d.m.Y H:i'))
-            ->row('Стол '.$order->table_name.($order->guests ? ' · гостей '.$order->guests : ''), 'Официант: '.$this->firstName((string) $order->waiter_name))
+            ->row($order->place().($order->guests ? ' · гостей '.$order->guests : ''), ($order->isTakeaway() ? 'Кассир: ' : 'Официант: ').$this->firstName((string) $order->waiter_name))
             ->rule();
 
         // Одинаковые блюда по одной цене — одной строкой
@@ -107,7 +107,7 @@ class ReceiptTemplates
         }
         $r->rule('=')
             ->row('ИТОГО', self::money($total), 't', true);
-        if ($order->status === 'paid') {
+        if ($order->isPaid()) {
             $r->row('Оплата', $order->payment === 'cash' ? 'наличные' : 'карта');
             if ($order->payment === 'cash' && $order->received) {
                 $r->row('Получено', self::money($order->received))

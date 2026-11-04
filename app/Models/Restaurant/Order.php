@@ -10,11 +10,13 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
 
 /**
- * Заказ столика.
+ * Заказ: столика (type = table) или навынос (type = takeaway, без столика — его ведёт кассир).
  *
  * Статусы: new — отправлен на кухню, ничего не начато; cooking — готовится; ready — всё, что не подано, готово;
- * served — всё подано, гости за столом; paid — оплачен и закрыт (попал в продажи); cancelled — отменён.
+ * served — всё подано (навынос — выдано гостю); paid — оплачен и закрыт (попал в продажи); cancelled — отменён.
  * Пока заказ открыт, статус пересчитывается по позициям (refreshStatus).
+ * Навынос можно оплатить заранее: продажа создаётся сразу (sale_id, paid_at), а заказ остаётся открытым,
+ * пока его не выдали гостю. Оплаченный заказ больше не меняется (дозаказ и отмена закрыты).
  * Завершённый заказ (paid, cancelled) больше не меняется и уходит на онлайн-сервер (synced_at).
  */
 class Order extends Model
@@ -30,6 +32,8 @@ class Order extends Model
 
     public const PAYMENTS = ['cash', 'card'];
 
+    public const TYPES = ['table', 'takeaway'];
+
     public const STATUS_NAMES = [
         'new' => 'Новый', 'cooking' => 'Готовится', 'ready' => 'Готов', 'served' => 'Подан',
         'paid' => 'Оплачен', 'cancelled' => 'Отменён',
@@ -38,9 +42,13 @@ class Order extends Model
     protected $table = 'restaurant_orders';
 
     protected $fillable = [
-        'uuid', 'number', 'table_id', 'table_name', 'waiter_id', 'waiter_name', 'guests', 'comment', 'status', 'total',
+        'uuid', 'number', 'type', 'table_id', 'table_name', 'waiter_id', 'waiter_name', 'guests', 'comment', 'status', 'total',
         'payment', 'received', 'change_amount', 'sale_id', 'closed_by', 'bill_at', 'paid_at', 'cancelled_at',
         'cancel_reason', 'synced_at', 'created_at', 'updated_at',
+    ];
+
+    protected $attributes = [
+        'type' => 'table',
     ];
 
     protected $casts = [
@@ -87,6 +95,28 @@ class Order extends Model
     public function sale()
     {
         return $this->belongsTo(Sale::class, 'sale_id');
+    }
+
+    public function terminalPayments()
+    {
+        return $this->hasMany(TerminalPayment::class, 'order_id');
+    }
+
+    public function isTakeaway(): bool
+    {
+        return $this->type === 'takeaway';
+    }
+
+    /** Деньги получены: заказ закрыт оплатой или навынос оплачен заранее. */
+    public function isPaid(): bool
+    {
+        return $this->status === 'paid' || $this->sale_id !== null;
+    }
+
+    /** «Стол 5» или «Навынос» — для экранов, чеков и заголовков печати. */
+    public function place(): string
+    {
+        return $this->isTakeaway() ? 'Навынос' : 'Стол '.$this->table_name;
     }
 
     public function isOpen(): bool

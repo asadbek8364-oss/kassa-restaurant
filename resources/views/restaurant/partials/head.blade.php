@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="{{ $meta['short'] }}">
-<meta name="apple-mobile-web-app-status-bar-style" content="{{ $app === 'kitchen' ? 'black' : 'default' }}">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="robots" content="noindex">
 @unless($demo ?? false)
 <link rel="manifest" href="/{{ $app }}/manifest.webmanifest">

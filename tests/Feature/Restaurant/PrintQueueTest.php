@@ -115,9 +115,8 @@ class PrintQueueTest extends TestCase
     {
         $this->printerMode('network', ['printer_codepage' => 'cp1251']);
         $order = $this->sendOrder();
-        $this->actAs($this->cook);
-        $this->postJson("/api/restaurant/kitchen/tickets/{$order['tickets'][0]['id']}/ready")->assertOk();
         $this->actAs($this->waiter);
+        $this->mark($order, 'ready')->assertOk();
         $this->postJson("/api/restaurant/waiter/orders/{$order['id']}/bill")->assertOk()->assertJsonPath('printed', true);
 
         $this->assertCount(2, $this->printer->sent);
@@ -150,8 +149,9 @@ class PrintQueueTest extends TestCase
     {
         $this->printerMode('network');
         $order = $this->sendOrder();
-        $this->actAs($this->cook);
-        $this->postJson("/api/restaurant/kitchen/tickets/{$order['tickets'][0]['id']}/reprint")->assertOk();
+        // кухонный чек повторяют из заказа (официант, кассир, админка) — на экране кухни кнопок нет
+        $this->actAs($this->waiter);
+        $this->postJson("/api/restaurant/waiter/orders/{$order['id']}/tickets/{$order['tickets'][0]['id']}/reprint")->assertOk();
         $this->assertCount(2, $this->printer->sent);
         $this->assertStringContainsString('ПОВТОРНАЯ ПЕЧАТЬ', $this->printer->texts()[1]);
 
@@ -162,10 +162,11 @@ class PrintQueueTest extends TestCase
         $this->postJson('/api/restaurant/admin/settings/printer/test')->assertUnprocessable()->assertJsonPath('ok', false)
             ->assertJsonPath('message', 'Принтер 192.168.1.50:9100 недоступен');
 
-        // печать выключена — повторная печать с кухни объясняет, что делать
+        // печать выключена — повторная печать объясняет, что делать
         $this->printerMode('off');
+        $this->postJson("/api/restaurant/admin/orders/{$order['id']}/tickets/{$order['tickets'][0]['id']}/reprint")->assertUnprocessable();
         $this->actAs($this->cook);
-        $this->postJson("/api/restaurant/kitchen/tickets/{$order['tickets'][0]['id']}/reprint")->assertUnprocessable();
+        $this->postJson("/api/restaurant/kitchen/tickets/{$order['tickets'][0]['id']}/reprint")->assertNotFound();
     }
 
     public function test_printer_settings_are_validated(): void

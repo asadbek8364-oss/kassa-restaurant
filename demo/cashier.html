@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Ресторан · Кассир — демо</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Зал и открытые заказы, заказы навынос, приём оплаты наличными и картой через терминал">
+<meta name="theme-color" content="#0369a1">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Кассир">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="robots" content="noindex">
+<link rel="icon" href="assets/icons/cashier.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icons/cashier-192.png">
+<link rel="stylesheet" href="assets/restaurant.css?v=c02c2290ac">
+</head>
+
+<body class="app-cashier" data-app="cashier">
+<div class="waiter-shell" id="shell" hidden>
+  <header class="w-top">
+    <button class="w-back" id="back" data-act="back" aria-label="Назад" hidden></button>
+    <div class="w-title"><span class="eyebrow" id="eyebrow"></span><h1 id="title">Касса</h1></div>
+    <div class="w-net" id="net" hidden></div>
+    <button class="w-who" id="who" data-act="account" aria-label="Сотрудник"></button>
+  </header>
+  <nav class="w-tabs" id="tabs" aria-label="Разделы кассы"></nav>
+  <main class="w-view" id="view" tabindex="-1"><div class="boot">Загрузка…</div>
+</main>
+  <footer class="w-bar" id="bar" hidden></footer>
+</div>
+<main class="login-view" id="login" hidden></main>
+<div class="modal-layer" id="modal" hidden>
+  <div class="modal-backdrop" data-act="modalClose"></div>
+  <div class="modal" role="dialog" aria-modal="true" id="modal-box"></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<iframe id="print-frame" class="print-frame" title="Печать чека" tabindex="-1" aria-hidden="true"></iframe>
+<noscript><p class="noscript">Для работы приложения включите JavaScript.</p></noscript>
+
+<script src="assets/demo-server.js?v=c02c2290ac"></script>
+<script src="assets/common.js?v=c02c2290ac"></script>
+<script src="assets/floor.js?v=c02c2290ac"></script>
+<script src="assets/cashier.js?v=c02c2290ac"></script>
+</body>
+</html>

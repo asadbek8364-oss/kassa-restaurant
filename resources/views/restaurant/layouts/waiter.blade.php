@@ -3,7 +3,7 @@
 <head>
 @include('restaurant.partials.head')
 </head>
-{{-- Официант: крупные кнопки для планшета и телефона, всё в 2–3 касания. --}}
+{{-- Официант: телефон (≈ 390–430 px) и планшет, крупные кнопки, всё в 2–3 касания. --}}
 <body class="app-waiter" data-app="{{ $app }}">
 <div class="waiter-shell" id="shell" hidden>
   <header class="w-top">

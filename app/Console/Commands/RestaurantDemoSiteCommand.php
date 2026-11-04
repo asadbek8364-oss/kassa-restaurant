@@ -7,7 +7,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
 
 /**
- * Статическая демо-версия ресторана (каталог demo/): лаунчер, три приложения и руководство работают в браузере
+ * Статическая демо-версия ресторана (каталог demo/): лаунчер, приложения и руководство работают в браузере
  * без сервера — вместо него эмулятор API (demo/assets/demo-server.js). Команда собирает страницы приложений
  * из тех же Blade-layout'ов, что и на сервере, и копирует их скрипты и стили, чтобы демо не расходилось с программой.
  * Лаунчер, руководство и эмулятор лежат в demo/ и правятся там.
@@ -19,7 +19,7 @@ class RestaurantDemoSiteCommand extends Command
     protected $description = 'Ресторан: собрать страницы приложений для статической демо-версии (demo/)';
 
     /** Файлы приложений из public/restaurant, которые нужны демо-версии. */
-    public const ASSETS = ['restaurant.css', 'common.js', 'admin.js', 'waiter.js', 'kitchen.js'];
+    public const ASSETS = ['restaurant.css', 'common.js', 'floor.js', 'admin.js', 'waiter.js', 'cashier.js', 'kitchen.js'];
 
     public function handle(): int
     {
@@ -38,11 +38,14 @@ class RestaurantDemoSiteCommand extends Command
         $version = substr(md5(implode('', $hashes)), 0, 10);
 
         foreach (PageController::APPS as $app => $meta) {
-            $html = view("restaurant.{$app}", ['app' => $app, 'meta' => $meta, 'v' => $version, 'assets' => 'assets', 'demo' => true])->render();
+            $html = view("restaurant.{$app}", [
+                'app' => $app, 'meta' => $meta, 'v' => $version, 'assets' => 'assets', 'demo' => true,
+                'floor' => in_array($app, PageController::FLOOR, true),
+            ])->render();
             File::put($out.'/'.$app.'.html', $html);
         }
 
-        $this->info('Демо-версия собрана в '.$out.': admin.html, waiter.html, kitchen.html и assets/.');
+        $this->info('Демо-версия собрана в '.$out.': '.implode(', ', array_map(fn ($a) => $a.'.html', array_keys(PageController::APPS))).' и assets/.');
         $this->line('Откройте '.$out.'/index.html через любой веб-сервер, например: php -S 127.0.0.1:8080 -t '.$this->option('out'));
 
         return self::SUCCESS;

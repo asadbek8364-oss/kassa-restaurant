@@ -192,7 +192,8 @@ class SyncClient
             ])->values()->all(),
         ])->values()->all();
         $payload['orders'] = $orders->map(fn (Order $o) => [
-            'uuid' => $o->uuid, 'number' => $o->number, 'table_uuid' => $uuids['tables'][$o->table_id] ?? null, 'table_name' => $o->table_name,
+            'uuid' => $o->uuid, 'number' => $o->number, 'type' => $o->type,
+            'table_uuid' => $uuids['tables'][$o->table_id] ?? null, 'table_name' => $o->table_name,
             'waiter_uuid' => $employee($o->waiter_id), 'waiter_name' => $o->waiter_name, 'guests' => $o->guests, 'comment' => $o->comment,
             'status' => $o->status, 'total' => $o->total, 'payment' => $o->payment, 'received' => $o->received,
             'change_amount' => $o->change_amount, 'sale_uuid' => $uuids['sales'][$o->sale_id] ?? null,

@@ -12,6 +12,8 @@ use App\Models\Restaurant\PrintJob;
 use App\Models\Restaurant\Settings;
 use App\Models\Restaurant\SyncLog;
 use App\Models\Restaurant\Table;
+use App\Models\Restaurant\TerminalPayment;
+use App\Services\Restaurant\Terminal\EmulatorTerminal;
 use App\Support\Kassa\Clock;
 use Illuminate\Support\Collection;
 
@@ -73,6 +75,8 @@ class Presenter
         return [
             'id' => $o->id,
             'number' => $o->number,
+            'type' => $o->type,
+            'place' => $o->place(),
             'table_id' => $o->table_id,
             'table_name' => $o->table_name,
             'waiter' => ['id' => $o->waiter_id, 'name' => $o->waiter_name],
@@ -84,6 +88,7 @@ class Presenter
             'items_count' => $items ? (int) $items->where('status', '!=', 'cancelled')->sum('qty') : null,
             'ready_count' => $items ? (int) $items->where('status', 'ready')->sum('qty') : null,
             'payment' => $o->payment,
+            'paid' => $o->isPaid(),
             'created_at' => Clock::iso($o->created_at),
             'bill_at' => Clock::iso($o->bill_at),
             'paid_at' => Clock::iso($o->paid_at),
@@ -91,15 +96,23 @@ class Presenter
         ];
     }
 
+    /** Короткий состав заказа (без отменённого) — для очереди навынос у кассира. */
+    public static function lines(Order $o): array
+    {
+        return $o->items->where('status', '!=', 'cancelled')->sortBy('id')
+            ->map(fn (OrderItem $i) => ['name' => $i->name, 'qty' => $i->qty, 'status' => $i->status])->values()->all();
+    }
+
     public static function order(Order $o): array
     {
-        $o->loadMissing(['items', 'tickets.employee', 'sale']);
+        $o->loadMissing(['items', 'tickets.employee', 'sale', 'terminalPayments']);
 
         return self::orderSummary($o) + [
             'received' => $o->received,
             'change' => $o->change_amount,
             'cancel_reason' => $o->cancel_reason,
             'sale_number' => $o->sale?->number,
+            'terminal' => $o->terminalPayments->sortByDesc('id')->map(fn (TerminalPayment $p) => self::terminalPayment($p))->values()->all(),
             'items' => $o->items->sortBy('id')->map(fn (OrderItem $i) => self::item($i))->values()->all(),
             'tickets' => $o->tickets->sortBy('batch')->map(fn (KitchenTicket $t) => [
                 'id' => $t->id,
@@ -146,6 +159,8 @@ class Presenter
             'order_id' => $order->id,
             'number' => $order->number,
             'batch' => $t->batch,
+            'takeaway' => $order->isTakeaway(),
+            'place' => $order->place(),
             'table_name' => $order->table_name,
             'guests' => $order->guests,
             'waiter' => $t->employee?->name ?? $order->waiter_name,
@@ -176,7 +191,30 @@ class Presenter
             'printer_port' => $s->printer_port,
             'printer_codepage' => $s->printer_codepage,
             'printer_width' => $s->printer_width,
+            'terminal_enabled' => (bool) $s->terminal_enabled,
+            'terminal_host' => $s->terminal_host,
+            'terminal_port' => $s->terminal_port,
+            'terminal_test' => (bool) $s->terminal_test,
             'unsynced' => self::unsynced($s),
+        ];
+    }
+
+    /** Оплата через терминал кассы: ожидание и результат для экрана кассира и админки. */
+    public static function terminalPayment(TerminalPayment $p): array
+    {
+        return [
+            'id' => $p->id,
+            'order_id' => $p->order_id,
+            'amount' => $p->amount,
+            'status' => $p->status,
+            'status_name' => TerminalPayment::STATUS_NAMES[$p->status] ?? $p->status,
+            'message' => $p->message,
+            'reference' => $p->reference,
+            'auth_code' => $p->auth_code,
+            'card' => $p->card,
+            'test' => $p->driver === EmulatorTerminal::NAME,
+            'created_at' => Clock::iso($p->created_at),
+            'finished_at' => Clock::iso($p->finished_at),
         ];
     }
 

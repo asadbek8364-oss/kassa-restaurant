@@ -24,6 +24,7 @@ use App\Http\Controllers\Api\Restaurant\Admin\StaffController as RestaurantStaff
 use App\Http\Controllers\Api\Restaurant\Admin\SyncController as RestaurantSync;
 use App\Http\Controllers\Api\Restaurant\Admin\TableController as RestaurantTables;
 use App\Http\Controllers\Api\Restaurant\AuthController as RestaurantAuth;
+use App\Http\Controllers\Api\Restaurant\CashierController as RestaurantCashier;
 use App\Http\Controllers\Api\Restaurant\KitchenController as RestaurantKitchen;
 use App\Http\Controllers\Api\Restaurant\SyncServerController as RestaurantSyncServer;
 use App\Http\Controllers\Api\Restaurant\WaiterController as RestaurantWaiter;
@@ -228,15 +229,34 @@ Route::prefix('kassa')->name('kassa.')->group(function () {
 
 /*
 |--------------------------------------------------------------------------
-| Ресторан — /api/restaurant (приложения /admin, /waiter, /kitchen)
+| Ресторан — /api/restaurant (приложения /admin, /waiter, /cashier, /kitchen)
 |--------------------------------------------------------------------------
 |
 | Вход — тот же PIN и тот же токен, что в кассе (kassa.auth). Доступ по роли (kassa.app):
-| админка — владелец и администратор; официант — официант и администратор; кухня — повар и администратор.
+| админка — владелец и администратор; официант — официант и администратор; кассир — кассир и администратор;
+| кухня — повар и администратор. Экран кухни только показывает заказы: отметки «готовится / готово / подано»
+| ставят официант, кассир и админка. У кассира — заказы навынос и оплата через банковский терминал.
 | Синхронизация (sync/*) — только на онлайн-сервере, по sync-токену ресторана (restaurant.sync).
 |
 */
-Route::prefix('restaurant')->name('restaurant.')->group(function () {
+// Зал: столики, заказы, отметки статусов, счёт и оплата — одинаково у официанта и кассира
+$floor = function (string $controller) {
+    Route::get('/state', [$controller, 'state'])->name('state');
+    Route::get('/menu', [$controller, 'menu'])->name('menu');
+    Route::post('/orders', [$controller, 'open'])->name('orders.open');
+    Route::get('/orders/{order}', [$controller, 'show'])->whereNumber('order')->name('orders.show');
+    Route::post('/orders/{order}/items', [$controller, 'add'])->whereNumber('order')->name('orders.add');
+    Route::post('/orders/{order}/items/{item}/cancel', [$controller, 'cancelItem'])->whereNumber(['order', 'item'])->name('orders.items.cancel');
+    Route::post('/orders/{order}/status', [$controller, 'status'])->whereNumber('order')->name('orders.status');
+    Route::post('/orders/{order}/serve', [$controller, 'serve'])->whereNumber('order')->name('orders.serve');
+    Route::post('/orders/{order}/tickets/{ticket}/reprint', [$controller, 'reprint'])->whereNumber(['order', 'ticket'])->name('orders.reprint');
+    Route::post('/orders/{order}/bill', [$controller, 'bill'])->whereNumber('order')->name('orders.bill');
+    Route::get('/orders/{order}/receipt', [$controller, 'receipt'])->whereNumber('order')->name('orders.receipt');
+    Route::post('/orders/{order}/pay', [$controller, 'pay'])->whereNumber('order')->name('orders.pay');
+    Route::post('/orders/{order}/cancel', [$controller, 'cancel'])->whereNumber('order')->name('orders.cancel');
+};
+
+Route::prefix('restaurant')->name('restaurant.')->group(function () use ($floor) {
     Route::get('/options', [RestaurantAuth::class, 'options'])->middleware('throttle:kassa-public')->name('options');
     Route::post('/login', [RestaurantAuth::class, 'login'])->middleware('throttle:kassa-login')->name('login');
 
@@ -246,40 +266,35 @@ Route::prefix('restaurant')->name('restaurant.')->group(function () {
         Route::get('/pull', [RestaurantSyncServer::class, 'pull'])->name('pull');
     });
 
-    Route::middleware(['kassa.auth', 'throttle:kassa-api'])->group(function () {
+    Route::middleware(['kassa.auth', 'throttle:kassa-api'])->group(function () use ($floor) {
         Route::post('/logout', [RestaurantAuth::class, 'logout'])->name('logout');
         Route::get('/me', [RestaurantAuth::class, 'whoami'])->name('me');
 
-        Route::prefix('waiter')->name('waiter.')->middleware('kassa.app:waiter')->group(function () {
-            Route::get('/state', [RestaurantWaiter::class, 'state'])->name('state');
-            Route::get('/menu', [RestaurantWaiter::class, 'menu'])->name('menu');
-            Route::post('/orders', [RestaurantWaiter::class, 'open'])->name('orders.open');
-            Route::get('/orders/{order}', [RestaurantWaiter::class, 'show'])->whereNumber('order')->name('orders.show');
-            Route::post('/orders/{order}/items', [RestaurantWaiter::class, 'add'])->whereNumber('order')->name('orders.add');
-            Route::post('/orders/{order}/items/{item}/cancel', [RestaurantWaiter::class, 'cancelItem'])->whereNumber(['order', 'item'])->name('orders.items.cancel');
-            Route::post('/orders/{order}/serve', [RestaurantWaiter::class, 'serve'])->whereNumber('order')->name('orders.serve');
-            Route::post('/orders/{order}/bill', [RestaurantWaiter::class, 'bill'])->whereNumber('order')->name('orders.bill');
-            Route::get('/orders/{order}/receipt', [RestaurantWaiter::class, 'receipt'])->whereNumber('order')->name('orders.receipt');
-            Route::post('/orders/{order}/pay', [RestaurantWaiter::class, 'pay'])->whereNumber('order')->name('orders.pay');
-            Route::post('/orders/{order}/cancel', [RestaurantWaiter::class, 'cancel'])->whereNumber('order')->name('orders.cancel');
+        Route::prefix('waiter')->name('waiter.')->middleware('kassa.app:waiter')->group(fn () => $floor(RestaurantWaiter::class));
+
+        Route::prefix('cashier')->name('cashier.')->middleware('kassa.app:cashier')->group(function () use ($floor) {
+            $floor(RestaurantCashier::class);
+            Route::post('/takeaway', [RestaurantCashier::class, 'takeaway'])->name('takeaway');
+            Route::post('/orders/{order}/handout', [RestaurantCashier::class, 'handout'])->whereNumber('order')->name('orders.handout');
+            Route::post('/orders/{order}/terminal', [RestaurantCashier::class, 'terminalStart'])->whereNumber('order')->name('terminal.start');
+            Route::get('/terminal/{payment}', [RestaurantCashier::class, 'terminalShow'])->whereNumber('payment')->name('terminal.show');
+            Route::post('/terminal/{payment}/cancel', [RestaurantCashier::class, 'terminalCancel'])->whereNumber('payment')->name('terminal.cancel');
+            Route::post('/terminal/{payment}/emulate', [RestaurantCashier::class, 'terminalEmulate'])->whereNumber('payment')->name('terminal.emulate');
         });
 
+        // Кухня — пассивный дисплей: доска заказов и печать чеков из браузера
         Route::prefix('kitchen')->name('kitchen.')->middleware('kassa.app:kitchen')->group(function () {
             Route::get('/board', [RestaurantKitchen::class, 'board'])->name('board');
-            Route::post('/tickets/{ticket}/start', [RestaurantKitchen::class, 'start'])->whereNumber('ticket')->name('tickets.start');
-            Route::post('/tickets/{ticket}/ready', [RestaurantKitchen::class, 'ready'])->whereNumber('ticket')->name('tickets.ready');
-            Route::post('/tickets/{ticket}/served', [RestaurantKitchen::class, 'served'])->whereNumber('ticket')->name('tickets.served');
-            Route::post('/tickets/{ticket}/reprint', [RestaurantKitchen::class, 'reprint'])->whereNumber('ticket')->name('tickets.reprint');
-            Route::post('/items/{item}/status', [RestaurantKitchen::class, 'item'])->whereNumber('item')->name('items.status');
             Route::post('/print-jobs/{job}/claim', [RestaurantKitchen::class, 'claimPrint'])->whereNumber('job')->name('print.claim');
-            Route::get('/menu', [RestaurantKitchen::class, 'menu'])->name('menu');
-            Route::post('/dishes/{dish}/stop', [RestaurantKitchen::class, 'stop'])->whereNumber('dish')->name('dishes.stop');
         });
 
         Route::prefix('admin')->name('admin.')->middleware('kassa.app:admin')->group(function () {
             Route::get('/dashboard', [RestaurantDashboard::class, 'show'])->name('dashboard');
             Route::get('/orders', [RestaurantDashboard::class, 'orders'])->name('orders.index');
             Route::get('/orders/{order}', [RestaurantDashboard::class, 'order'])->whereNumber('order')->name('orders.show');
+            Route::post('/orders/{order}/status', [RestaurantDashboard::class, 'status'])->whereNumber('order')->name('orders.status');
+            Route::post('/orders/{order}/handout', [RestaurantDashboard::class, 'handout'])->whereNumber('order')->name('orders.handout');
+            Route::post('/orders/{order}/tickets/{ticket}/reprint', [RestaurantDashboard::class, 'reprint'])->whereNumber(['order', 'ticket'])->name('orders.reprint');
 
             Route::get('/menu', [RestaurantMenu::class, 'index'])->name('menu');
             Route::post('/categories', [RestaurantMenu::class, 'storeCategory'])->name('categories.store');
@@ -306,6 +321,8 @@ Route::prefix('restaurant')->name('restaurant.')->group(function () {
             Route::put('/settings/restaurant', [RestaurantSettings::class, 'updateRestaurant'])->name('settings.restaurant');
             Route::put('/settings/printer', [RestaurantSettings::class, 'updatePrinter'])->name('settings.printer');
             Route::post('/settings/printer/test', [RestaurantSettings::class, 'testPrint'])->name('settings.printer.test');
+            Route::put('/settings/terminal', [RestaurantSettings::class, 'updateTerminal'])->name('settings.terminal');
+            Route::post('/settings/terminal/test', [RestaurantSettings::class, 'testTerminal'])->name('settings.terminal.test');
             Route::get('/print-jobs', [RestaurantSettings::class, 'printJobs'])->name('print-jobs.index');
             Route::post('/print-jobs/{job}/retry', [RestaurantSettings::class, 'retryJob'])->whereNumber('job')->name('print-jobs.retry');
 

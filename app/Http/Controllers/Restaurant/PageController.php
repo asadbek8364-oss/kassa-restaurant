@@ -7,10 +7,11 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
 
 /**
- * Страницы трёх приложений ресторана. У каждого свой адрес, свой layout и своя конфигурация PWA
+ * Страницы четырёх приложений ресторана. У каждого свой адрес, свой layout и своя конфигурация PWA
  * (манифест с отдельным id и service worker со своей областью) — на устройство они ставятся
- * как три отдельных приложения. Всё содержимое — в public/restaurant, внешних ресурсов нет,
+ * как отдельные приложения. Всё содержимое — в public/restaurant, внешних ресурсов нет,
  * поэтому приложения работают в локальной сети ресторана без интернета.
+ * Официант и кассир работают с залом одинаково: общий модуль floor.js и свой файл приложения.
  */
 class PageController extends Controller
 {
@@ -33,21 +34,33 @@ class PageController extends Controller
             'display' => 'standalone',
             'orientation' => 'any',
         ],
+        'cashier' => [
+            'name' => 'Ресторан · Кассир',
+            'short' => 'Кассир',
+            'description' => 'Зал и открытые заказы, заказы навынос, приём оплаты наличными и картой через терминал',
+            'theme' => '#0369a1',
+            'background' => '#f2f6f9',
+            'display' => 'standalone',
+            'orientation' => 'any',
+        ],
         'kitchen' => [
             'name' => 'Ресторан · Кухня',
             'short' => 'Кухня',
-            'description' => 'Экран кухни: заказы колонками «Новые → Готовятся → Готово»',
-            'theme' => '#0b0f14',
-            'background' => '#0b0f14',
+            'description' => 'Экран кухни: заказы колонками «Новые → Готовятся → Готово», только просмотр',
+            'theme' => '#ffffff',
+            'background' => '#ffffff',
             'display' => 'fullscreen',
             'orientation' => 'landscape',
         ],
     ];
 
+    /** Приложения зала: официант и кассир — общий модуль floor.js. */
+    public const FLOOR = ['waiter', 'cashier'];
+
     public function show(string $app): Response
     {
         return response()
-            ->view("restaurant.{$app}", ['app' => $app, 'meta' => self::APPS[$app], 'v' => $this->version($app), 'assets' => '/restaurant', 'demo' => false])
+            ->view("restaurant.{$app}", ['app' => $app, 'meta' => self::APPS[$app], 'v' => $this->version($app), 'assets' => '/restaurant', 'demo' => false, 'floor' => in_array($app, self::FLOOR, true)])
             ->header('Cache-Control', 'no-cache');
     }
 
@@ -79,7 +92,7 @@ class PageController extends Controller
     }
 
     /**
-     * Service worker приложения. Область — /admin, /waiter или /kitchen (заголовок Service-Worker-Allowed),
+     * Service worker приложения. Область — /admin, /waiter, /cashier или /kitchen (заголовок Service-Worker-Allowed),
      * версия кэша — по времени изменения файлов: обновлённое приложение подхватывается само.
      */
     public function serviceWorker(string $app): Response
@@ -90,6 +103,7 @@ class PageController extends Controller
             "/{$app}/manifest.webmanifest",
             "/restaurant/restaurant.css?v={$v}",
             "/restaurant/common.js?v={$v}",
+            ...(in_array($app, self::FLOOR, true) ? ["/restaurant/floor.js?v={$v}"] : []),
             "/restaurant/{$app}.js?v={$v}",
             "/restaurant/icons/{$app}.svg",
             "/restaurant/icons/{$app}-192.png",
@@ -107,7 +121,8 @@ class PageController extends Controller
     private function version(string $app): string
     {
         $dir = public_path('restaurant');
-        $times = array_map(fn ($f) => @filemtime($dir.'/'.$f) ?: 0, ['restaurant.css', 'common.js', "{$app}.js"]);
+        $files = ['restaurant.css', 'common.js', ...(in_array($app, self::FLOOR, true) ? ['floor.js'] : []), "{$app}.js"];
+        $times = array_map(fn ($f) => @filemtime($dir.'/'.$f) ?: 0, $files);
 
         return base_convert((string) max($times), 10, 36);
     }

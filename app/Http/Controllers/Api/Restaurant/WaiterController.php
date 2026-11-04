@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Restaurant;
 
+use App\Http\Controllers\Api\Restaurant\Concerns\OrderStatusActions;
 use App\Models\Restaurant\Category;
 use App\Models\Restaurant\Dish;
 use App\Models\Restaurant\Order;
@@ -17,11 +18,14 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
 /**
- * Приложение официанта: схема зала, меню, заказ на столик, дозаказ, подача, счёт и оплата.
+ * Приложение официанта: схема зала, меню, заказ на столик, дозаказ, отметки «готовится / готово / подано»,
+ * счёт и оплата. Те же действия — основа приложения кассира (CashierController).
  */
 class WaiterController extends RestaurantController
 {
-    public function __construct(private readonly OrderService $orders) {}
+    use OrderStatusActions;
+
+    public function __construct(protected readonly OrderService $orders) {}
 
     /**
      * Схема зала: столики со статусом (свободен / занят / ждёт счёт) и открытыми заказами.
@@ -29,18 +33,23 @@ class WaiterController extends RestaurantController
      */
     public function state(): JsonResponse
     {
-        $open = Order::with('items')->whereIn('status', Order::OPEN)->orderBy('id')->get()->keyBy('table_id');
+        $all = Order::with('items')->whereIn('status', Order::OPEN)->orderBy('id')->get();
+        $open = $all->where('type', 'table')->keyBy('table_id');
         $tables = Table::where('active', true)->orderBy('sort')->orderBy('id')->get();
+        $settings = Settings::current();
 
         return response()->json([
             'server_time' => Clock::now()->toIso8601String(),
             'mode' => Mode::current(),
-            'printer_mode' => Settings::current()->printer_mode,
+            'printer_mode' => $settings->printer_mode,
+            'terminal' => ['enabled' => $settings->terminalOn(), 'test' => (bool) $settings->terminal_test],
             'menu_version' => $this->menuVersion(),
             'tables' => $tables->map(fn (Table $t) => Presenter::table($t, $open->get($t->id)))->values()->all(),
             // заказы без столика (столик удалили, пока гости сидят) — чтобы их можно было закрыть
             'orphans' => $open->filter(fn (Order $o, $tableId) => ! $tables->contains('id', $tableId))
                 ->map(fn (Order $o) => Presenter::orderSummary($o))->values()->all(),
+            // открытые заказы навынос (ведёт кассир)
+            'takeaway' => $all->where('type', 'takeaway')->map(fn (Order $o) => Presenter::orderSummary($o) + ['lines' => Presenter::lines($o)])->values()->all(),
         ]);
     }
 
@@ -90,7 +99,7 @@ class WaiterController extends RestaurantController
     public function serve(Request $request, Order $order): JsonResponse
     {
         $data = $this->check($request, ['item_ids' => 'nullable|array|max:200', 'item_ids.*' => 'integer']);
-        $order = $this->orders->serve($order, $data['item_ids'] ?? null);
+        $order = $this->orders->serve($order, $data['item_ids'] ?? null, $this->me($request));
 
         return response()->json(['order' => Presenter::order($order->fresh())]);
     }
@@ -145,7 +154,7 @@ class WaiterController extends RestaurantController
         return response()->json(['order' => Presenter::order($order->fresh())]);
     }
 
-    private function itemRules(): array
+    protected function itemRules(): array
     {
         return [
             'items' => 'required|array|min:1|max:100',

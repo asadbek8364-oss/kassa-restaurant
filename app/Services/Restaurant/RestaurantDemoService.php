@@ -24,20 +24,21 @@ use RuntimeException;
 
 /**
  * Демо-ресторан (только для разработки и показа, как демо кассы): 22 блюда в 5 категориях, 8 столиков,
- * по одному сотруднику каждой роли, оплаченные заказы за две недели и несколько открытых заказов
- * в разных статусах, чтобы все три приложения сразу показывали работу. Генерация детерминирована.
+ * по одному сотруднику каждой роли (администратор, официант, повар, кассир), оплаченные заказы за две недели
+ * (за столиками и навынос) и открытые заказы в разных статусах, чтобы все приложения сразу показывали работу.
+ * Терминал кассы включён в тестовом режиме (эмулятор). Генерация детерминирована.
  */
 class RestaurantDemoService
 {
     public const NAME = 'Демо-ресторан «Навруз»';
 
-    public const PINS = ['admin' => '1111', 'waiter' => '2222', 'cook' => '3333'];
+    public const PINS = ['admin' => '1111', 'waiter' => '2222', 'cook' => '3333', 'cashier' => '4444'];
 
-    public const HINT = 'Демо: администратор — PIN 1111, официант — 2222, повар — 3333';
+    public const HINT = 'Демо: администратор — PIN 1111, официант — 2222, повар — 3333, кассир — 4444';
 
     /** Таблицы ресторана и кассы с данными магазина: позиции раньше документов (внешние ключи). */
     public const STORE_TABLES = [
-        'restaurant_print_jobs', 'restaurant_order_items', 'restaurant_kitchen_tickets', 'restaurant_orders',
+        'restaurant_terminal_payments', 'restaurant_print_jobs', 'restaurant_order_items', 'restaurant_kitchen_tickets', 'restaurant_orders',
         'restaurant_dishes', 'restaurant_categories', 'restaurant_tables', 'restaurant_settings', 'restaurant_sync_logs',
         'kassa_audit_items', 'kassa_audits', 'kassa_income_items', 'kassa_incomes', 'kassa_return_items',
         'kassa_returns', 'kassa_sale_items', 'kassa_sales', 'kassa_products',
@@ -98,11 +99,16 @@ class RestaurantDemoService
             $store = Store::create(['name' => self::NAME, 'address' => 'г. Ташкент, ул. Навои, 30', 'is_demo' => true]);
             $context->set($store);
 
-            Settings::current()->update(['cook_minutes' => 15, 'receipt_footer' => 'Спасибо, что были у нас! Ждём снова', 'printer_mode' => 'off']);
+            Settings::current()->update([
+                'cook_minutes' => 15, 'receipt_footer' => 'Спасибо, что были у нас! Ждём снова', 'printer_mode' => 'off',
+                // терминал кассы — эмулятор: «Отправить на терминал» и имитация оплаты или отказа
+                'terminal_enabled' => true, 'terminal_test' => true,
+            ]);
             $staff = [
                 'admin' => Employee::create(['name' => 'Дилшод Каримов', 'role' => 'admin', 'phone' => '+998 90 123-45-67', 'pin' => self::PINS['admin']]),
                 'waiter' => Employee::create(['name' => 'Азиз Рахимов', 'role' => 'waiter', 'phone' => '+998 93 541-20-18', 'pin' => self::PINS['waiter']]),
                 'cook' => Employee::create(['name' => 'Шахзода Юсупова', 'role' => 'cook', 'phone' => '+998 97 730-55-02', 'pin' => self::PINS['cook']]),
+                'cashier' => Employee::create(['name' => 'Малика Турсунова', 'role' => 'cashier', 'phone' => '+998 99 812-33-40', 'pin' => self::PINS['cashier']]),
             ];
 
             $categories = [];
@@ -126,7 +132,7 @@ class RestaurantDemoService
         });
     }
 
-    /** Оплаченные заказы за 14 прошлых дней и сегодня до текущего часа (с продажами кассы). */
+    /** Оплаченные заказы за 14 прошлых дней и сегодня до текущего часа (с продажами кассы); примерно каждый шестой — навынос. */
     private function history(Store $store, CarbonImmutable $now, array $staff, array $dishes, array $tables): void
     {
         $today = $now->startOfDay();
@@ -148,22 +154,24 @@ class RestaurantDemoService
         $saleNo = 1001;
         foreach ($plans as $opened) {
             $paidAt = max($opened->addMinute(), min($opened->addMinutes(35 + $this->int(50)), $now->subMinutes(5)));
-            $table = $tables[$this->int(count($tables))];
-            $waiter = $this->r->nextFloat() < 0.8 ? $staff['waiter'] : $staff['admin'];
-            $lines = $this->pick($dishes, 2 + $this->int(4));
+            $takeaway = $this->r->nextFloat() < 0.17;
+            $table = $takeaway ? null : $tables[$this->int(count($tables))];
+            $waiter = $takeaway ? $staff['cashier'] : ($this->r->nextFloat() < 0.8 ? $staff['waiter'] : $staff['admin']);
+            $lines = $this->pick($dishes, $takeaway ? 1 + $this->int(3) : 2 + $this->int(4));
             $total = array_sum(array_map(fn ($l) => $l['dish']->price * $l['qty'], $lines));
             $payment = $this->r->nextFloat() < 0.55 ? 'card' : 'cash';
             $received = $payment === 'cash' ? (int) (ceil($total / 50000) * 50000) : null;
             $at = fn (CarbonImmutable $t) => Clock::toDb($t);
 
             $sale = Sale::create([
-                'number' => $saleNo++, 'employee_id' => $waiter->id, 'customer' => 'Стол '.$table->name.' · заказ №'.$orderNo,
+                'number' => $saleNo++, 'employee_id' => $waiter->id, 'customer' => ($takeaway ? 'Навынос' : 'Стол '.$table->name).' · заказ №'.$orderNo,
                 'payment' => $payment, 'total' => $total, 'cost_total' => 0, 'received' => $received,
                 'change_amount' => $received ? $received - $total : 0, 'created_at' => $at($paidAt), 'updated_at' => $at($paidAt),
             ]);
             $order = Order::create([
-                'number' => $orderNo++, 'table_id' => $table->id, 'table_name' => $table->name, 'waiter_id' => $waiter->id,
-                'waiter_name' => $waiter->name, 'guests' => 1 + $this->int($table->seats), 'status' => 'paid', 'total' => $total,
+                'number' => $orderNo++, 'type' => $takeaway ? 'takeaway' : 'table', 'table_id' => $table?->id, 'table_name' => $table?->name,
+                'waiter_id' => $waiter->id, 'waiter_name' => $waiter->name, 'guests' => $takeaway ? null : 1 + $this->int($table->seats),
+                'status' => 'paid', 'total' => $total,
                 'payment' => $payment, 'received' => $received, 'change_amount' => $received ? $received - $total : 0,
                 'sale_id' => $sale->id, 'closed_by' => $waiter->id, 'bill_at' => $at($paidAt->subMinutes(3)), 'paid_at' => $at($paidAt),
                 'created_at' => $at($opened), 'updated_at' => $at($paidAt),
@@ -181,25 +189,31 @@ class RestaurantDemoService
         $store->update(['next_order_no' => $orderNo, 'next_sale_no' => $saleNo]);
     }
 
-    /** Открытые заказы: новый, готовится, готов, ждёт счёт — по одному на столик. */
+    /**
+     * Открытые заказы: за столиками — новый, готовится, готов, ждёт счёт; навынос — готовится (оплачен заранее картой)
+     * и готов к выдаче (оплата при выдаче).
+     */
     private function openOrders(Store $store, CarbonImmutable $now, array $staff, array $dishes, array $tables): void
     {
         $byName = collect($dishes)->keyBy(fn ($d) => $d['dish']->name)->map(fn ($d) => $d['dish']);
         $plans = [
-            // [столик, минут назад, гостей, [[блюдо, кол-во, комментарий, статус]], комментарий к заказу, счёт]
-            [1, 3, 2, [['Лагман', 2, 'без зелени', 'new'], ['Самса с мясом', 2, null, 'new'], ['Чай зелёный (чайник)', 1, null, 'new']], null, false],
-            [2, 9, 4, [['Плов чайханский', 3, null, 'cooking'], ['Ачичук', 2, null, 'ready'], ['Лепёшка тандырная', 2, null, 'cooking'], ['Шашлык из баранины', 4, 'хорошо прожарить', 'new']], 'у гостя аллергия на орехи', false],
-            [4, 18, 3, [['Манты (5 шт.)', 2, null, 'ready'], ['Шурпа', 1, 'острое', 'ready'], ['Компот домашний', 3, null, 'ready']], null, false],
-            [6, 55, 5, [['Плов чайханский', 2, null, 'served'], ['Шашлык из курицы', 3, null, 'served'], ['Айран', 2, null, 'served'], ['Чай чёрный с лимоном', 1, null, 'served']], null, true],
+            // [столик или null — навынос, минут назад, гостей, [[блюдо, кол-во, комментарий, статус]], комментарий к заказу, счёт, оплачен]
+            [1, 3, 2, [['Лагман', 2, 'без зелени', 'new'], ['Самса с мясом', 2, null, 'new'], ['Чай зелёный (чайник)', 1, null, 'new']], null, false, null],
+            [2, 9, 4, [['Плов чайханский', 3, null, 'cooking'], ['Ачичук', 2, null, 'ready'], ['Лепёшка тандырная', 2, null, 'cooking'], ['Шашлык из баранины', 4, 'хорошо прожарить', 'new']], 'у гостя аллергия на орехи', false, null],
+            [4, 18, 3, [['Манты (5 шт.)', 2, null, 'ready'], ['Шурпа', 1, 'острое', 'ready'], ['Компот домашний', 3, null, 'ready']], null, false, null],
+            [6, 55, 5, [['Плов чайханский', 2, null, 'served'], ['Шашлык из курицы', 3, null, 'served'], ['Айран', 2, null, 'served'], ['Чай чёрный с лимоном', 1, null, 'served']], null, true, null],
+            [null, 6, null, [['Плов чайханский', 2, null, 'cooking'], ['Самса с мясом', 4, null, 'cooking'], ['Лепёшка тандырная', 1, null, 'ready']], 'Анвар, заберёт в 13:30', false, 'card'],
+            [null, 12, null, [['Шашлык из курицы', 2, 'соус отдельно', 'ready'], ['Компот домашний', 2, null, 'ready']], 'Гульнора', false, null],
         ];
         $number = $store->fresh()->next_order_no;
-        foreach ($plans as [$tableIndex, $minutes, $guests, $lines, $comment, $bill]) {
-            $table = $tables[$tableIndex];
+        $saleNo = $store->fresh()->next_sale_no;
+        foreach ($plans as [$tableIndex, $minutes, $guests, $lines, $comment, $bill, $paid]) {
+            $table = $tableIndex === null ? null : $tables[$tableIndex];
             $sent = $now->subMinutes($minutes);
-            $waiter = $staff['waiter'];
+            $waiter = $table ? $staff['waiter'] : $staff['cashier'];
             $order = Order::create([
-                'number' => $number++, 'table_id' => $table->id, 'table_name' => $table->name, 'waiter_id' => $waiter->id,
-                'waiter_name' => $waiter->name, 'guests' => $guests, 'comment' => $comment, 'status' => 'new',
+                'number' => $number++, 'type' => $table ? 'table' : 'takeaway', 'table_id' => $table?->id, 'table_name' => $table?->name,
+                'waiter_id' => $waiter->id, 'waiter_name' => $waiter->name, 'guests' => $guests, 'comment' => $comment, 'status' => 'new',
                 'bill_at' => $bill ? Clock::toDb($now->subMinutes(2)) : null,
                 'created_at' => Clock::toDb($sent), 'updated_at' => Clock::toDb($sent),
             ]);
@@ -222,9 +236,22 @@ class RestaurantDemoService
                 ] + $times);
             }
             $order->refreshStatus();
+            if ($paid) {
+                // навынос, оплаченный заранее: продажа уже в кассе, заказ закроется при выдаче
+                $paidAt = $sent->addMinute();
+                $sale = Sale::create([
+                    'number' => $saleNo++, 'employee_id' => $waiter->id, 'customer' => 'Навынос · заказ №'.$order->number,
+                    'payment' => $paid, 'total' => $order->total, 'cost_total' => 0, 'received' => null, 'change_amount' => 0,
+                    'created_at' => Clock::toDb($paidAt), 'updated_at' => Clock::toDb($paidAt),
+                ]);
+                foreach ($order->activeItems() as $item) {
+                    SaleItem::create(['sale_id' => $sale->id, 'name' => $item->name, 'qty' => $item->qty, 'price' => $item->price, 'cost' => 0]);
+                }
+                $order->fill(['payment' => $paid, 'sale_id' => $sale->id, 'paid_at' => Clock::toDb($paidAt), 'bill_at' => Clock::toDb($paidAt)]);
+            }
             $order->save();
         }
-        $store->update(['next_order_no' => $number]);
+        $store->update(['next_order_no' => $number, 'next_sale_no' => $saleNo]);
     }
 
     /** Несколько разных блюд с учётом популярности. */

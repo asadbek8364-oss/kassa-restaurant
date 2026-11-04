@@ -32,7 +32,7 @@ class AuthController extends RestaurantController
 
     private const PIN_LOCK_SECONDS = 900;
 
-    public const APPS = ['admin', 'waiter', 'kitchen'];
+    public const APPS = Apps::RESTAURANT;
 
     /** Экран входа приложения: ресторан, его сотрудники с доступом к приложению, нужна ли первая настройка. */
     public function options(Request $request, StoreContext $context): JsonResponse
@@ -42,7 +42,7 @@ class AuthController extends RestaurantController
         $store = $found ?? Store::query()->orderBy('id')->first() ?? Store::current();
         $context->set($store);
         $app = $data['app'];
-        $homeRole = ['admin' => 'admin', 'waiter' => 'waiter', 'kitchen' => 'cook'][$app];
+        $homeRole = Apps::HOME_ROLE[$app];
         $setup = KassaAuth::setupState();
 
         return response()->json([
@@ -116,7 +116,7 @@ class AuthController extends RestaurantController
         $me = $this->me($request);
         $store = Store::current();
         $settings = Settings::current();
-        $apps = array_values(array_filter(['admin', 'waiter', 'kitchen', 'kassa'], fn ($a) => Apps::allows($a, $me->role)));
+        $apps = array_values(array_filter([...Apps::RESTAURANT, 'kassa'], fn ($a) => Apps::allows($a, $me->role)));
 
         return response()->json([
             'employee' => Presenter::staff($me),
@@ -126,7 +126,11 @@ class AuthController extends RestaurantController
             'mode' => Mode::current(),
             'mode_name' => Mode::label(),
             'timezone' => config('kassa.timezone'),
-            'settings' => ['cook_minutes' => $settings->cook_minutes, 'printer_mode' => $settings->printer_mode],
+            'settings' => [
+                'cook_minutes' => $settings->cook_minutes,
+                'printer_mode' => $settings->printer_mode,
+                'terminal' => ['enabled' => $settings->terminalOn(), 'test' => (bool) $settings->terminal_test],
+            ],
             'poll_seconds' => (int) config('restaurant.poll_seconds', 5),
             'sync_configured' => Mode::local() && $settings->syncConfigured(),
             'sync_attention' => Apps::allows('admin', $me->role) && Mode::local() ? $sync->summary()['attention'] : false,

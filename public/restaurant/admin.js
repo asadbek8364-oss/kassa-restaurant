@@ -1,6 +1,7 @@
 /*
- * Админка ресторана: главная, меню и стоп-лист, столики, сотрудники и PIN, заказы, отчёты,
- * склад (касса), настройки — параметры ресторана, принтер кухни, режим сервера и синхронизация.
+ * Админка ресторана: главная, меню и стоп-лист, столики, сотрудники и PIN, заказы (с отметками «готовится /
+ * готово / подано», повторной печатью кухонного чека и оплатами через терминал), отчёты, склад (касса),
+ * настройки — параметры ресторана, принтер кухни, платёжный терминал кассы, режим сервера и синхронизация.
  */
 'use strict';
 (function () {
@@ -32,6 +33,7 @@
     window.addEventListener('hashchange', route);
     route();
   });
+  const STEP = { new: ['cooking', 'Готовится'], cooking: ['ready', 'Готово'], ready: ['served', 'Подано'] };
 
   function renderNav() {
     const nav = SECTIONS.map(([key, label]) => html`<a href="#${key}" class="${A.section === key ? 'on' : ''}">${svg(key)}<span>${label}</span>${key === 'home' && R.me.sync_attention ? html`<span class="count">!</span>` : ''}</a>`);
@@ -62,6 +64,7 @@
     R.set(R.$('#view'), html`<div class="empty">Загрузка…</div>`);
     ({ home, menu, tables, staff, orders, reports, stock, settings })[A.section]();
     R.$('#view').focus({ preventScroll: true });
+    R.enter(R.$('#view'));
   }
   const reload = () => route();
   const load = async (path) => {
@@ -89,7 +92,7 @@
     A.data.dashboard = d;
     const s = d.sync;
     renderBanner(s);
-    actions(html`<a class="btn" href="${R.urls.waiter}">Официант</a><a class="btn" href="${R.urls.kitchen}">Кухня</a>`);
+    actions(html`<a class="btn" href="${R.urls.waiter}">Официант</a><a class="btn" href="${R.urls.cashier}">Кассир</a><a class="btn" href="${R.urls.kitchen}">Кухня</a>`);
     view(html`
       <div class="stats">
         <div class="stat"><div class="k">Выручка сегодня</div><div class="v">${R.money(d.today.revenue)} <small>сум</small></div></div>
@@ -97,6 +100,7 @@
         <div class="stat"><div class="k">Средний чек</div><div class="v">${R.money(d.today.avg)} <small>сум</small></div></div>
         <div class="stat"><div class="k">Занято столиков</div><div class="v">${d.tables.busy} <small>из ${d.tables.total}</small></div></div>
         <div class="stat"><div class="k">На кухне</div><div class="v">${d.kitchen.new + d.kitchen.cooking} <small>· готово ${d.kitchen.ready}</small></div></div>
+        <div class="stat"><div class="k">Навынос</div><div class="v">${d.takeaway ? d.takeaway.open : 0} <small>· к выдаче ${d.takeaway ? d.takeaway.ready : 0}</small></div></div>
       </div>
       <div class="grid-2" style="margin-top:16px">
         <section class="card"><div class="card-h"><h2>Открытые заказы</h2><a class="btn btn-sm btn-ghost" href="#orders">Все заказы</a></div>
@@ -142,8 +146,8 @@
 
   function orderRow(o) {
     return html`<button class="list-row" style="width:100%;border-left:0;border-right:0;border-bottom:0;background:none;text-align:left" data-act="orderDetail" data-id="${o.id}">
-      <div class="grow"><div class="t">№ ${o.number} · стол ${o.table_name}</div><div class="s">${o.waiter.name || '—'} · ${R.time(o.created_at)}${o.guests ? ' · гостей ' + o.guests : ''}</div></div>
-      <span class="st-pill st-${o.status}">${R.STATUS[o.status]}</span><b class="nowrap">${R.money(o.total)}</b></button>`;
+      <div class="grow"><div class="t">№ ${o.number} · ${R.place(o).toLowerCase()}</div><div class="s">${o.waiter.name || '—'} · ${R.time(o.created_at)}${o.guests ? ' · гостей ' + o.guests : ''}${o.paid && o.status !== 'paid' ? ' · оплачен' : ''}</div></div>
+      <span class="st-pill st-${o.status}">${R.statusName(o)}</span><b class="nowrap">${R.money(o.total)}</b></button>`;
   }
 
   // ---------------------------------------------------------------- Меню
@@ -206,7 +210,7 @@
     if (!d) return;
     A.data.staff = d.staff;
     actions(html`<button class="btn btn-primary" data-act="editStaff">+ Сотрудник</button>`);
-    const home = { owner: '/admin', admin: '/admin', waiter: '/waiter', cook: '/kitchen', seller: '/kassa/' }; // адрес приложения роли (подпись)
+    const home = { owner: '/admin', admin: '/admin', waiter: '/waiter', cashier: '/cashier', cook: '/kitchen', seller: '/kassa/' }; // адрес приложения роли (подпись)
     view(html`<section class="card"><div class="card-h"><h2>Команда</h2><span class="sub">Вход по PIN: роль определяет, какое приложение откроется</span></div>
       <div class="list">${d.staff.map((e) => html`<div class="list-row${e.active ? '' : ' off'}">
         <span class="avatar sm ${e.role}">${R.initials(e.name)}</span>
@@ -230,17 +234,57 @@
       ${d.orders.length ? html`<div class="list">${d.orders.map((o) => orderRow(o))}</div>` : html`<div class="empty">Заказов нет</div>`}</section>`);
   }
 
-  async function orderDetail(id) {
+  async function orderDetail(id, keep) {
     let o;
     try { o = (await R.api('GET', '/admin/orders/' + id)).order; } catch (e) { R.fail(e); return; }
-    R.modal(html`<h2>Заказ № ${o.number} · стол ${o.table_name}</h2>
-      <p class="sub">${o.waiter.name || '—'} · открыт ${R.dateTime(o.created_at)}${o.guests ? ' · гостей ' + o.guests : ''} · <span class="st-pill st-${o.status}">${R.STATUS[o.status]}</span></p>
+    A.order = o;
+    const open = !['paid', 'cancelled'].includes(o.status);
+    const printing = A.data.dashboard ? A.data.dashboard.printer.mode !== 'off' : true;
+    const batches = {};
+    o.items.forEach((i) => { (batches[i.batch] = batches[i.batch] || []).push(i); });
+    const ticket = (b) => o.tickets.find((x) => x.batch === Number(b)) || {};
+    const label = (st) => (o.type === 'takeaway' && st === 'served' ? 'Выдано' : R.ITEM_STATUS[st] || st);
+    const agg = (items) => {
+      const active = items.filter((i) => i.status !== 'cancelled');
+      const pending = active.filter((i) => i.status !== 'served');
+      if (!active.length) return 'cancelled';
+      if (!pending.length) return 'served';
+      if (pending.every((i) => i.status === 'ready')) return 'ready';
+      return pending.every((i) => i.status === 'new') ? 'new' : 'cooking';
+    };
+    const allReady = o.items.some((i) => i.status === 'ready') && !o.items.some((i) => i.status === 'new' || i.status === 'cooking');
+    R.modal(html`<h2>Заказ № ${o.number} · ${R.place(o).toLowerCase()}</h2>
+      <p class="sub">${o.waiter.name || '—'} · открыт ${R.dateTime(o.created_at)}${o.guests ? ' · гостей ' + o.guests : ''} · <span class="st-pill st-${o.status}">${R.statusName(o)}</span></p>
       ${o.comment ? html`<p class="sub">Комментарий: ${o.comment}</p>` : ''}
-      <div class="table-wrap"><table class="data"><thead><tr><th>Блюдо</th><th class="num">Кол-во</th><th class="num">Сумма</th><th>Статус</th></tr></thead>
-        <tbody>${o.items.map((i) => html`<tr><td>${i.name}${i.comment ? html`<div class="sub">${i.comment}</div>` : ''}${i.batch > 1 ? html` <span class="pill">дозаказ</span>` : ''}</td>
-          <td class="num">${i.qty}</td><td class="num">${R.money(i.sum)}</td><td><span class="st-pill st-${i.status}">${R.STATUS[i.status] || i.status}</span></td></tr>`)}</tbody></table></div>
+      ${open ? html`<p class="sub">Экран кухни только показывает заказы — отметки «готовится», «готово», «подано» ставятся здесь, у официанта или у кассира.</p>` : ''}
+      ${Object.keys(batches).sort((a, b) => a - b).map((b) => {
+        const tk = ticket(b);
+        const st = agg(batches[b]);
+        const step = open && STEP[st] && !(o.type === 'takeaway' && st === 'ready') ? STEP[st] : null;
+        return html`<div class="ad-batch"><div class="ad-batch-h"><span class="t">${Number(b) === 1 ? 'Заказ' : 'Дозаказ'} · ${R.time(tk.sent_at)}${tk.employee ? ' · ' + tk.employee : ''}</span>
+            ${st !== 'cancelled' ? html`<span class="st-pill st-${st}">${label(st)}</span>` : ''}
+            ${step ? html`<button class="btn btn-sm btn-soft" data-act="adBatch" data-ticket="${tk.id}" data-to="${step[0]}">${step[1]}</button>` : ''}
+            ${open && printing && tk.id ? html`<button class="btn btn-sm" data-act="adReprint" data-ticket="${tk.id}">Чек на кухню</button>` : ''}</div>
+          ${batches[b].map((i) => html`<div class="ad-item"><div class="nm"><b>${i.qty} × ${i.name}</b>${i.comment ? html`<div class="sub">${i.comment}</div>` : ''}</div>
+            <span class="nowrap">${R.money(i.sum)}</span>
+            ${open && ['new', 'cooking', 'ready'].includes(i.status) ? html`<select class="select" data-change="adItem" data-id="${i.id}" aria-label="Статус: ${i.name}">${['new', 'cooking', 'ready', 'served'].map((st2) => html`<option value="${st2}"${raw(i.status === st2 ? ' selected' : '')}>${label(st2)}</option>`)}</select>`
+              : html`<span class="st-pill st-${i.status}">${label(i.status)}</span>`}</div>`)}</div>`;
+      })}
       <p style="margin-top:12px"><b>Итого: ${R.sum(o.total)}</b>${o.payment ? ' · ' + PAY[o.payment] : ''}${o.paid_at ? ' · оплачен ' + R.dateTime(o.paid_at) : ''}${o.sale_number ? ' · чек кассы № ' + o.sale_number : ''}</p>
-      ${o.cancel_reason ? html`<p class="sub">Причина отмены: ${o.cancel_reason}</p>` : ''}`, { wide: true });
+      ${o.type === 'takeaway' && open && allReady ? html`<div class="form-actions" style="justify-content:flex-start"><button class="btn btn-ok" data-act="adHandout">Выдан гостю</button></div>` : ''}
+      ${o.cancel_reason ? html`<p class="sub">Причина отмены: ${o.cancel_reason}</p>` : ''}
+      ${o.terminal && o.terminal.length ? html`<h3 style="margin:14px 0 4px;font-size:15px">Оплаты через терминал</h3><div class="list term-list">${o.terminal.map((t) => html`<div class="list-row">
+        <div class="grow"><div class="t">${R.sum(t.amount)} · ${t.status_name}${t.test ? ' (тестовый режим)' : ''}</div><div class="s">${R.dateTime(t.created_at)}${t.card ? ' · ' + t.card : ''}${t.reference ? ' · RRN ' + t.reference : ''}${t.message ? ' · ' + t.message : ''}</div></div>
+        <span class="pill ${{ approved: 'ok', pending: 'info', declined: 'bad', error: 'bad' }[t.status] || ''}">${t.status_name}</span></div>`)}</div>` : ''}`, { wide: true, keep: !!keep, focus: false });
+  }
+
+  async function orderStatus(body, done) {
+    try {
+      await R.api('POST', '/admin/orders/' + A.order.id + '/status', body);
+      if (done) R.toast(done, 'ok');
+    } catch (e) { R.fail(e); }
+    await orderDetail(A.order.id, true);
+    if (A.section === 'home' || A.section === 'orders') ({ home, orders })[A.section]();
   }
 
   // ---------------------------------------------------------------- Отчёты
@@ -276,8 +320,8 @@
         <div class="bars">${d.by_day.map((x) => html`<div class="bar" title="${R.date(x.day + 'T12:00:00')}: ${R.money(x.revenue)} сум, заказов ${x.orders}, средний чек ${R.money(x.avg)}">
           <i style="height:${Math.round((x.revenue / max) * 100)}%"></i>${showLabels ? html`<span>${x.day.slice(8)}.${x.day.slice(5, 7)}</span>` : ''}</div>`)}</div></section>
       <div class="grid-2" style="margin-top:16px">
-        <section class="card"><div class="card-h"><h2>По официантам</h2></div>${table(d.by_waiter, 'Официант')}</section>
-        <section class="card"><div class="card-h"><h2>По столикам</h2></div>${table(d.by_table, 'Столик')}</section>
+        <section class="card"><div class="card-h"><h2>По сотрудникам</h2></div>${table(d.by_waiter, 'Официант или кассир')}</section>
+        <section class="card"><div class="card-h"><h2>По столикам и навынос</h2></div>${table(d.by_table, 'Столик')}</section>
         <section class="card"><div class="card-h"><h2>Популярные блюда</h2></div>
           ${d.top_dishes.length ? html`<div class="table-wrap"><table class="data"><thead><tr><th>Блюдо</th><th class="num">Порций</th><th class="num">Выручка</th></tr></thead>
             <tbody>${d.top_dishes.map((x) => html`<tr><td>${x.name}</td><td class="num">${x.qty}</td><td class="num">${R.money(x.revenue)}</td></tr>`)}</tbody></table></div>` : html`<div class="empty">Нет данных</div>`}</section>
@@ -336,8 +380,23 @@
           ${j.status === 'failed' || j.status === 'pending' ? html`<button class="btn btn-sm" data-act="retryJob" data-id="${j.id}">Повторить</button>` : ''}</div>`)}</div>` : ''}
       </section>
 
+      ${terminalSettings(st, d.terminal_driver)}
+
       ${syncSettings(sy, s.log)}
     </div>`);
+  }
+
+  function terminalSettings(st, driver) {
+    return html`<section class="card"><div class="card-h"><h2>Платёжный терминал кассы</h2>${st.terminal_enabled ? html`<span class="pill ${st.terminal_test ? 'info' : 'ok'}">${st.terminal_test ? 'тестовый режим' : 'включён'}</span>` : html`<span class="pill">выключен</span>`}</div>
+      <p class="sub">У кассира при оплате картой сумма уходит на банковский терминал в локальной сети; заказ закрывается только после подтверждения оплаты.</p>
+      <form data-submit="saveTerminal">
+        <label class="check"><input type="checkbox" name="terminal_enabled"${raw(st.terminal_enabled ? ' checked' : '')}> Оплата картой через терминал</label>
+        <label class="check"><input type="checkbox" name="terminal_test"${raw(st.terminal_test ? ' checked' : '')}> Тестовый режим — эмулятор: имитирует оплату и отказ, деньги не списываются</label>
+        <div class="row2" style="margin-top:8px"><div class="field"><label for="tm-host">Адрес терминала</label><input class="input mono" id="tm-host" name="terminal_host" value="${st.terminal_host || ''}" placeholder="192.168.1.60" inputmode="decimal"></div>
+          <div class="field"><label for="tm-port">Порт</label><input class="input mono" id="tm-port" name="terminal_port" type="number" min="1" max="65535" value="${st.terminal_port || ''}" placeholder="8888"></div></div>
+        <p class="sub">Драйвер: <span class="mono">${driver}</span>${driver === 'json' ? ' — протокол-образец (JSON по TCP). Настоящий терминал подключается своим драйвером: протокол зависит от модели терминала и банка — см. docs/restaurant.md.' : ''}</p>
+        <div class="form-actions"><button type="button" class="btn" data-act="testTerminal"${raw(st.terminal_enabled ? '' : ' disabled')}>Проверить связь</button><button class="btn btn-primary">Сохранить</button></div>
+      </form></section>`;
   }
 
   function syncSettings(sy, log) {
@@ -448,7 +507,7 @@
       R.modal(html`<h2>${e ? e.name : 'Новый сотрудник'}</h2><form data-submit="saveStaff" data-id="${e ? e.id : ''}">
         <div class="field"><label for="e-name">Имя</label><input class="input" id="e-name" name="name" required maxlength="60" value="${e ? e.name : ''}" autofocus></div>
         <div class="row2"><div class="field"><label for="e-role">Роль</label><select class="select" id="e-role" name="role">
-            ${[['waiter', 'Официант — /waiter'], ['cook', 'Повар — /kitchen'], ['admin', 'Администратор — /admin']].map(([v, l]) => html`<option value="${v}"${raw(e && e.role === v ? ' selected' : '')}>${l}</option>`)}</select></div>
+            ${[['waiter', 'Официант — /waiter'], ['cashier', 'Кассир — /cashier'], ['cook', 'Повар — /kitchen'], ['admin', 'Администратор — /admin']].map(([v, l]) => html`<option value="${v}"${raw(e && e.role === v ? ' selected' : '')}>${l}</option>`)}</select></div>
           <div class="field"><label for="e-phone">Телефон</label><input class="input" id="e-phone" name="phone" maxlength="20" value="${e ? e.phone || '' : ''}" inputmode="tel"></div></div>
         <div class="field"><label for="e-pin">${e ? 'Новый PIN (оставьте пустым, чтобы не менять)' : 'PIN (4–6 цифр)'}</label>
           <input class="input mono" id="e-pin" name="pin" inputmode="numeric" maxlength="6" autocomplete="off"${raw(e ? '' : ' required')}>
@@ -464,6 +523,26 @@
     orderFilter(el) { A.orderFilter = el.dataset.v; orders(); },
     orderDate(el) { A.orderDate = el.value || R.today(); orders(); },
     orderDetail(el) { orderDetail(el.dataset.id); },
+    adBatch(el) { orderStatus({ status: el.dataset.to, ticket_id: Number(el.dataset.ticket) }, 'Отмечено: ' + ({ cooking: 'готовится', ready: 'готово', served: 'подано' }[el.dataset.to])); },
+    adItem(el) { orderStatus({ status: el.value, item_ids: [Number(el.dataset.id)] }); },
+    async adReprint(el) {
+      await R.busy(el, async () => {
+        try { await R.api('POST', '/admin/orders/' + A.order.id + '/tickets/' + el.dataset.ticket + '/reprint'); R.toast('Кухонный чек отправлен на печать', 'ok'); } catch (e) { R.fail(e); }
+      });
+    },
+    async adHandout(el) {
+      await R.busy(el, async () => {
+        try { await R.api('POST', '/admin/orders/' + A.order.id + '/handout'); R.toast('Выдан гостю', 'ok'); } catch (e) { R.fail(e); }
+        await orderDetail(A.order.id, true);
+        if (A.section === 'home' || A.section === 'orders') ({ home, orders })[A.section]();
+      });
+    },
+    saveTerminal(form) { submitForm(form, 'PUT', '/admin/settings/terminal', () => { R.toast('Настройки терминала сохранены', 'ok'); return settings(); }); },
+    async testTerminal(el) {
+      await R.busy(el, async () => {
+        try { R.toast((await R.api('POST', '/admin/settings/terminal/test')).message, 'ok'); } catch (e) { R.fail(e); }
+      });
+    },
     reportRange(el) { A.reportRange = el.dataset.v; if (A.reportRange === 'custom' && !A.from) { [A.from, A.to] = range(); } reports(); },
     reportFrom(el) { A.from = el.value; reports(); },
     reportTo(el) { A.to = el.value; reports(); },
@@ -526,7 +605,7 @@
     },
     openApps() {
       R.modal(html`<h2>Приложения ресторана</h2><p class="sub">Каждое ставится на устройство отдельно: откройте адрес и выберите «Установить» или «На экран Домой».</p>
-        <div class="list">${[['waiter', 'Официант', 'планшет или телефон официанта'], ['kitchen', 'Кухня', 'монитор или планшет на кухне'], ['admin', 'Админка', 'этот экран'], ['kassa', 'Касса и склад', 'склад, приход, инвентаризация, прогнозы']].map(([a, n, s]) => html`<a class="list-row" href="${R.urls[a]}" style="text-decoration:none;color:inherit"><div class="grow"><div class="t">${n}</div><div class="s">${new URL(R.urls[a], location.href).href} · ${s}</div></div></a>`)}</div>`);
+        <div class="list">${[['waiter', 'Официант', 'телефон или планшет официанта'], ['cashier', 'Кассир', 'планшет или компьютер на кассе: навынос и оплата'], ['kitchen', 'Кухня', 'настенный монитор на кухне, только просмотр'], ['admin', 'Админка', 'этот экран'], ['kassa', 'Касса и склад', 'склад, приход, инвентаризация, прогнозы']].map(([a, n, s]) => html`<a class="list-row" href="${R.urls[a]}" style="text-decoration:none;color:inherit"><div class="grow"><div class="t">${n}</div><div class="s">${new URL(R.urls[a], location.href).href} · ${s}</div></div></a>`)}</div>`);
     },
     async switchStore(el) {
       if (el.value === 'new') {
