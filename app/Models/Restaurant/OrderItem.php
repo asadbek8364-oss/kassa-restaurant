@@ -20,6 +20,8 @@ class OrderItem extends Model
     /** Позиции, которые видит кухня. */
     public const ON_BOARD = ['new', 'cooking', 'ready'];
 
+    public const STATUS_NAMES = ['new' => 'Новое', 'cooking' => 'Готовится', 'ready' => 'Готово', 'served' => 'Подано', 'cancelled' => 'Отменено'];
+
     protected $table = 'restaurant_order_items';
 
     protected $fillable = [

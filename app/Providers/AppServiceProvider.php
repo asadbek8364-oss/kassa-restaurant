@@ -5,6 +5,8 @@ namespace App\Providers;
 use App\Services\Restaurant\Printing\PrinterTransport;
 use App\Services\Restaurant\Printing\PrintQueue;
 use App\Services\Restaurant\Printing\TcpPrinterTransport;
+use App\Services\Restaurant\Terminal\TcpTerminalTransport;
+use App\Services\Restaurant\Terminal\TerminalTransport;
 use App\Support\Kassa\StoreContext;
 use App\Support\ProductionSecurityBaseline;
 use Illuminate\Cache\RateLimiting\Limit;
@@ -27,6 +29,8 @@ class AppServiceProvider extends ServiceProvider
         // Ресторан: сетевой принтер ESC/POS (в тестах подменяется FakePrinterTransport) и очередь печати.
         $this->app->singleton(PrinterTransport::class, TcpPrinterTransport::class);
         $this->app->scoped(PrintQueue::class);
+        // Платёжный терминал кассы: связь с терминалом в локальной сети (в тестах — FakeTerminalTransport).
+        $this->app->singleton(TerminalTransport::class, TcpTerminalTransport::class);
     }
 
     /**

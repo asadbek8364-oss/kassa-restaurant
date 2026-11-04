@@ -12,6 +12,7 @@ use App\Models\Restaurant\Order;
 use App\Models\Restaurant\OrderItem;
 use App\Models\Restaurant\Settings;
 use App\Models\Restaurant\Table;
+use App\Models\Restaurant\TerminalPayment;
 use App\Services\Restaurant\Printing\PrintQueue;
 use App\Services\Restaurant\Printing\ReceiptTemplates;
 use App\Support\Restaurant\Mode;
@@ -21,11 +22,18 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Жизненный цикл заказа: открыть на столик и отправить на кухню → дозаказ → кухня готовит → подано →
- * счёт → оплата (заказ попадает в продажи кассы) или отмена.
+ * Жизненный цикл заказа: открыть на столик (или навынос) и отправить на кухню → дозаказ → готовится → готово →
+ * подано (навынос — выдано) → счёт → оплата (заказ попадает в продажи кассы) или отмена.
+ *
+ * Экран кухни только показывает заказы: отметки «готовится», «готово», «подано/выдано» ставят официант, кассир
+ * и администратор (setStatus, serve, handOut).
+ *
+ * Навынос можно оплатить заранее, пока блюда готовятся: продажа создаётся сразу, заказ закрывается, когда его
+ * выдали гостю. Оплаченный заказ не меняется: дозаказ и отмена закрыты (возврат денег — в «Кассе и складе»).
+ * Пока оплата ждёт банковский терминал, заказ нельзя изменить, отменить или оплатить иначе.
  *
  * Каждая операция — одна транзакция; первая запись — строка ресторана (Store::locked), поэтому параллельные
- * официанты и кухня меняют данные строго по очереди. Цены — только из меню на сервере.
+ * официанты, кассир и админка меняют данные строго по очереди. Цены — только из меню на сервере.
  * Отправка на кухню идемпотентна по client_uuid: повтор запроса с устройства не создаёт второй чек.
  */
 class OrderService
@@ -43,30 +51,48 @@ class OrderService
      */
     public function open(Employee $by, Table $table, array $lines, ?string $comment, ?int $guests, ?string $clientUuid): array
     {
+        return $this->create($by, $lines, $comment, $clientUuid, function () use ($table, $guests) {
+            $table = Table::find($table->id);
+            if (! $table || ! $table->active) {
+                $this->fail('table_id', 'Столик недоступен — обновите схему зала');
+            }
+            if ($open = $table->openOrder()) {
+                throw new RestaurantConflict("На столике {$table->name} уже открыт заказ №{$open->number} — добавьте блюда в него", $open->id);
+            }
+
+            return ['type' => 'table', 'table_id' => $table->id, 'table_name' => $table->name, 'guests' => $guests ?: null];
+        });
+    }
+
+    /**
+     * Заказ навынос (кассир): без столика, сразу на кухню. Комментарий — например, имя гостя.
+     *
+     * @param  list<array{dish_id:int, qty:int, comment?:?string}>  $lines
+     * @return array{0: Order, 1: bool}
+     */
+    public function openTakeaway(Employee $by, array $lines, ?string $comment, ?string $clientUuid): array
+    {
+        return $this->create($by, $lines, $comment, $clientUuid, fn () => ['type' => 'takeaway', 'table_id' => null, 'table_name' => null]);
+    }
+
+    /** Новый заказ и его первая отправка на кухню; $place — столик или навынос (проверяется под блокировкой). */
+    private function create(Employee $by, array $lines, ?string $comment, ?string $clientUuid, callable $place): array
+    {
         $this->ensureLocal();
         if ($replay = $this->replay($clientUuid)) {
             return [$replay, true];
         }
 
         try {
-            [$order, $ticket] = DB::transaction(function () use ($by, $table, $lines, $comment, $guests, $clientUuid) {
+            [$order, $ticket] = DB::transaction(function () use ($by, $lines, $comment, $clientUuid, $place) {
                 $store = Store::locked();
-                $table = Table::find($table->id);
-                if (! $table || ! $table->active) {
-                    $this->fail('table_id', 'Столик недоступен — обновите схему зала');
-                }
-                if ($open = $table->openOrder()) {
-                    throw new RestaurantConflict("На столике {$table->name} уже открыт заказ №{$open->number} — добавьте блюда в него", $open->id);
-                }
+                $attributes = $place();
                 $dishes = $this->dishes($lines);
 
-                $order = Order::create([
+                $order = Order::create($attributes + [
                     'number' => $store->takeNumber('order'),
-                    'table_id' => $table->id,
-                    'table_name' => $table->name,
                     'waiter_id' => $by->id,
                     'waiter_name' => $by->name,
-                    'guests' => $guests ?: null,
                     'comment' => $this->clean($comment, 200),
                     'status' => 'new',
                 ]);
@@ -103,6 +129,10 @@ class OrderService
             [$order, $ticket] = DB::transaction(function () use ($by, $order, $lines, $comment, $clientUuid) {
                 Store::locked();
                 $order = $this->lockOpen($order);
+                if ($order->isPaid()) {
+                    $this->fail('items', 'Заказ №'.$order->number.' уже оплачен — оформите новый заказ');
+                }
+                $this->ensureNoTerminal($order);
                 $dishes = $this->dishes($lines);
                 $batch = (int) KitchenTicket::where('order_id', $order->id)->max('batch') + 1;
                 $ticket = $this->send($order, $by, $batch, $lines, $dishes, $comment, $clientUuid);
@@ -121,50 +151,51 @@ class OrderService
         return [$order, false];
     }
 
-    /** Кухня: «начать готовить» весь тикет — новые позиции переходят в «готовится». */
-    public function startTicket(KitchenTicket $ticket): Order
-    {
-        return $this->moveTicket($ticket, ['new'], 'cooking');
-    }
-
-    /** Кухня: «готово» — все позиции тикета готовы, официант видит это у себя. */
-    public function readyTicket(KitchenTicket $ticket): Order
-    {
-        return $this->moveTicket($ticket, ['new', 'cooking'], 'ready');
-    }
-
-    /** Кухня: «выдано» — готовые позиции отданы официанту, карточка уходит с доски. */
-    public function serveTicket(KitchenTicket $ticket): Order
-    {
-        return $this->moveTicket($ticket, ['ready'], 'served');
-    }
-
     /**
-     * Кухня: статус одной позиции — new, cooking или ready (вернуть «готово» в «готовится», если ошиблись).
+     * Отметки вместо кухонного экрана — официант, кассир или администратор:
+     *  - $itemIds — выбранные позиции получают статус new, cooking, ready или served (ошиблись — можно вернуть назад,
+     *    кроме уже поданных);
+     *  - иначе весь заказ или одна отправка на кухню ($ticketId) — только вперёд: cooking ← new;
+     *    ready ← new, cooking; served ← ready.
+     * Навынос, оплаченный заранее, закрывается, когда всё выдано.
      */
-    public function setItemStatus(OrderItem $item, string $status): Order
+    public function setStatus(Employee $by, Order $order, string $status, ?int $ticketId = null, ?array $itemIds = null): Order
     {
         $this->ensureLocal();
+        if (! in_array($status, ['new', 'cooking', 'ready', 'served'], true)) {
+            $this->fail('status', 'Недопустимый статус');
+        }
+        if ($itemIds === null && $status === 'new') {
+            $this->fail('status', 'Вернуть в «новые» можно только отдельные позиции');
+        }
 
-        return DB::transaction(function () use ($item, $status) {
+        return DB::transaction(function () use ($by, $order, $status, $ticketId, $itemIds) {
             Store::locked();
-            $order = $this->lockOpen($item->order);
-            $item = OrderItem::where('order_id', $order->id)->findOrFail($item->id);
-            if (! in_array($item->status, OrderItem::ON_BOARD, true)) {
-                $this->fail('status', $item->status === 'cancelled' ? 'Позиция отменена' : 'Позиция уже подана');
+            $order = $this->lockOpen($order);
+            $query = OrderItem::where('order_id', $order->id)->whereIn('status', OrderItem::ON_BOARD)
+                ->when($ticketId !== null, fn ($q) => $q->where('ticket_id', $ticketId))
+                ->when($itemIds !== null, fn ($q) => $q->whereIn('id', $itemIds));
+            if ($itemIds === null) {
+                $query->whereIn('status', ['cooking' => ['new'], 'ready' => ['new', 'cooking'], 'served' => ['ready']][$status]);
             }
-            $this->move($item, $status);
+            $items = $query->get();
+            if ($items->isEmpty()) {
+                $this->fail('status', $status === 'served' ? 'Нет готовых блюд — сначала отметьте «Готово»' : 'Нет блюд, которые можно отметить «'.OrderItem::STATUS_NAMES[$status].'»');
+            }
+            foreach ($items as $item) {
+                $this->move($item, $status);
+            }
 
-            return $this->saveOrder($order);
+            return $this->saveOrder($order, $by);
         });
     }
 
     /** Официант: готовые позиции подал гостям (по умолчанию — все готовые). */
-    public function serve(Order $order, ?array $itemIds = null): Order
+    public function serve(Order $order, ?array $itemIds = null, ?Employee $by = null): Order
     {
         $this->ensureLocal();
 
-        return DB::transaction(function () use ($order, $itemIds) {
+        return DB::transaction(function () use ($order, $itemIds, $by) {
             Store::locked();
             $order = $this->lockOpen($order);
             $items = OrderItem::where('order_id', $order->id)->where('status', 'ready')
@@ -173,7 +204,35 @@ class OrderService
                 $this->move($item, 'served');
             }
 
-            return $this->saveOrder($order);
+            return $this->saveOrder($order, $by);
+        });
+    }
+
+    /**
+     * Навынос: «Выдан» — гость забрал заказ. Всё должно быть готово. Если заказ оплачен — он закрывается,
+     * если нет — ждёт оплаты (статус «выдан»).
+     */
+    public function handOut(Employee $by, Order $order): Order
+    {
+        $this->ensureLocal();
+
+        return DB::transaction(function () use ($by, $order) {
+            Store::locked();
+            $order = $this->lockOpen($order);
+            if (! $order->isTakeaway()) {
+                $this->fail('order', 'Это заказ столика — отметьте «Подано»');
+            }
+            $order->load('items');
+            $active = $order->activeItems();
+            $cooking = $active->whereIn('status', ['new', 'cooking']);
+            if ($cooking->isNotEmpty()) {
+                $this->fail('items', 'Ещё не готово: '.$cooking->pluck('name')->unique()->implode(', ').'. Отметьте «Готово», когда кухня отдаст заказ');
+            }
+            foreach ($active->where('status', 'ready') as $item) {
+                $this->move($item, 'served');
+            }
+
+            return $this->saveOrder($order, $by);
         });
     }
 
@@ -200,44 +259,42 @@ class OrderService
 
         $document = $this->guestReceipt($order);
         if ($print) {
-            $this->printer->enqueue('guest', 'Счёт №'.$order->number.' · стол '.$order->table_name, $document, $order);
+            $this->printer->enqueue('guest', 'Счёт №'.$order->number.' · '.mb_strtolower($order->place()), $document, $order);
         }
 
         return [$order, $document];
     }
 
     /**
-     * Оплата и закрытие заказа: создаётся продажа кассы (позиции — блюда по ценам заказа), заказ — paid,
-     * столик свободен. Пока что-то готовится, закрыть нельзя; готовое считается поданным.
+     * Оплата: создаётся продажа кассы (позиции — блюда по ценам заказа).
+     *
+     * Заказ столика оплата закрывает (paid), столик свободен; пока что-то готовится, закрыть нельзя, готовое считается
+     * поданным. Навынос можно оплатить заранее, пока блюда готовятся: заказ закроется, когда его выдадут гостю
+     * (если всё уже выдано — закрывается сразу).
      * Повторная оплата уже оплаченного заказа возвращает его без второй продажи.
+     * Карта через терминал кассы — $terminal: оплату проводит TerminalService, когда терминал её подтвердил.
      *
      * @return array{0: Order, 1: bool} [заказ, это повтор]
      */
-    public function pay(Employee $by, Order $order, string $payment, ?int $received): array
+    public function pay(Employee $by, Order $order, string $payment, ?int $received, ?TerminalPayment $terminal = null): array
     {
         $this->ensureLocal();
 
-        return DB::transaction(function () use ($by, $order, $payment, $received) {
+        return DB::transaction(function () use ($by, $order, $payment, $received, $terminal) {
             $store = Store::locked();
             $order = Order::whereKey($order->id)->lockForUpdate()->firstOrFail();
-            if ($order->status === 'paid') {
+            if ($order->isPaid()) {
                 return [$order, true];
             }
             if ($order->status === 'cancelled') {
                 throw new RestaurantConflict("Заказ №{$order->number} отменён", $order->id);
             }
-            $order->load('items');
+            $this->ensureNoTerminal($order, $terminal);
+            $total = $this->payableTotal($order);
             $active = $order->activeItems();
-            if ($active->isEmpty()) {
-                $this->fail('items', 'В заказе нет блюд к оплате');
+            if ($terminal && $terminal->amount !== $total) {
+                $this->fail('total', 'Сумма заказа изменилась, пока шла оплата на терминале');
             }
-            $cooking = $active->whereIn('status', ['new', 'cooking']);
-            if ($cooking->isNotEmpty()) {
-                $this->fail('items', 'Ещё готовятся: '.$cooking->pluck('name')->unique()->implode(', ')
-                    .'. Дождитесь «Готово» на кухне или отмените эти позиции');
-            }
-
-            $total = (int) $active->sum(fn (OrderItem $i) => $i->qty * $i->price);
             $change = 0;
             if ($payment === 'cash') {
                 $received = $received ?: $total;
@@ -252,7 +309,7 @@ class OrderService
             $sale = Sale::create([
                 'number' => $store->takeNumber('sale'),
                 'employee_id' => $order->waiter_id ?? $by->id,
-                'customer' => mb_substr('Стол '.$order->table_name.' · заказ №'.$order->number, 0, 60),
+                'customer' => mb_substr($order->place().' · заказ №'.$order->number, 0, 60),
                 'payment' => $payment,
                 'total' => $total,
                 'cost_total' => 0,
@@ -268,26 +325,51 @@ class OrderService
                     'price' => $item->price,
                     'cost' => 0,
                 ]);
-                if ($item->status === 'ready') {
+                if ($item->status === 'ready' && ! $order->isTakeaway()) {
                     $this->move($item, 'served');
                 }
             }
 
             $order->fill([
-                'status' => 'paid',
                 'total' => $total,
                 'payment' => $payment,
                 'received' => $received,
                 'change_amount' => $change,
                 'sale_id' => $sale->id,
-                'closed_by' => $by->id,
                 'paid_at' => now(),
             ]);
             $order->bill_at ??= now();
-            $order->save();
+            if ($order->isTakeaway()) {
+                $this->saveOrder($order, $by); // закроется, если всё уже выдано
+            } else {
+                $order->fill(['status' => 'paid', 'closed_by' => $by->id])->save();
+            }
 
             return [$order, false];
         });
+    }
+
+    /**
+     * Сумма к оплате; проверяет, что заказ можно оплатить: есть блюда, а у заказа столика ничего не готовится.
+     * Вызывается в транзакции с заблокированным заказом.
+     */
+    public function payableTotal(Order $order): int
+    {
+        if (! $order->isOpen() || $order->isPaid()) {
+            throw new RestaurantConflict("Заказ №{$order->number} уже ".($order->status === 'cancelled' ? 'отменён' : 'оплачен'), $order->id);
+        }
+        $order->load('items');
+        $active = $order->activeItems();
+        if ($active->isEmpty()) {
+            $this->fail('items', 'В заказе нет блюд к оплате');
+        }
+        $cooking = $active->whereIn('status', ['new', 'cooking']);
+        if (! $order->isTakeaway() && $cooking->isNotEmpty()) {
+            $this->fail('items', 'Ещё готовятся: '.$cooking->pluck('name')->unique()->implode(', ')
+                .'. Отметьте «Готово», когда кухня отдаст блюда, или отмените эти позиции');
+        }
+
+        return (int) $active->sum(fn (OrderItem $i) => $i->qty * $i->price);
     }
 
     /**
@@ -300,6 +382,7 @@ class OrderService
         [$order, $toKitchen] = DB::transaction(function () use ($by, $item) {
             Store::locked();
             $order = $this->lockOpen($item->order);
+            $this->ensureChangeable($order);
             $item = OrderItem::where('order_id', $order->id)->findOrFail($item->id);
             if ($item->status === 'cancelled') {
                 $this->fail('item', 'Позиция уже отменена');
@@ -326,6 +409,7 @@ class OrderService
         [$order, $toKitchen] = DB::transaction(function () use ($by, $order, $reason) {
             Store::locked();
             $order = $this->lockOpen($order);
+            $this->ensureChangeable($order);
             $order->load('items');
             $active = $order->activeItems();
             if ($active->contains(fn (OrderItem $i) => $i->status !== 'new') && ! $this->isManager($by)) {
@@ -351,7 +435,7 @@ class OrderService
         return $order;
     }
 
-    /** Повторная печать кухонного чека отправки (кнопка на карточке кухни). */
+    /** Повторная печать кухонного чека отправки (из заказа у официанта, кассира или в админке). */
     public function reprint(KitchenTicket $ticket): bool
     {
         if (! Settings::current()->printingEnabled()) {
@@ -368,21 +452,6 @@ class OrderService
         return $this->templates->guest($order, Store::current(), Settings::current());
     }
 
-    private function moveTicket(KitchenTicket $ticket, array $from, string $to): Order
-    {
-        $this->ensureLocal();
-
-        return DB::transaction(function () use ($ticket, $from, $to) {
-            Store::locked();
-            $order = $this->lockOpen($ticket->order);
-            foreach (OrderItem::where('ticket_id', $ticket->id)->whereIn('status', $from)->get() as $item) {
-                $this->move($item, $to);
-            }
-
-            return $this->saveOrder($order);
-        });
-    }
-
     private function move(OrderItem $item, string $to): void
     {
         if ($item->status === $to) {
@@ -397,15 +466,23 @@ class OrderService
             'cancelled' => $item->cancelled_at = $now,
             default => null,
         };
-        if ($to === 'cooking') {
+        if ($to === 'cooking' || $to === 'new') {
             $item->ready_at = null;
+        }
+        if ($to === 'new') {
+            $item->cooking_at = null;
         }
         $item->save();
     }
 
-    private function saveOrder(Order $order): Order
+    /** Пересчитать статус и сумму; навынос, оплаченный заранее, закрывается, когда всё выдано. */
+    private function saveOrder(Order $order, ?Employee $by = null): Order
     {
         $order->refreshStatus();
+        if ($order->isTakeaway() && $order->sale_id !== null && $order->status === 'served') {
+            $order->status = 'paid';
+            $order->closed_by ??= $by?->id;
+        }
         $order->save();
 
         return $order;
@@ -488,8 +565,27 @@ class OrderService
     private function printCancel(Order $order, Collection $items, Employee $by, ?string $reason): void
     {
         if ($items->isNotEmpty()) {
-            $this->printer->enqueue('cancel', 'Отмена · заказ №'.$order->number.' · стол '.$order->table_name,
+            $this->printer->enqueue('cancel', 'Отмена · заказ №'.$order->number.' · '.mb_strtolower($order->place()),
                 $this->templates->cancel($order, $items, Settings::current(), $by->name, $this->clean($reason, 100)), $order);
+        }
+    }
+
+    /** Оплаченный заказ не меняется: деньги уже в продажах кассы. */
+    private function ensureChangeable(Order $order): void
+    {
+        if ($order->isPaid()) {
+            $this->fail('order', 'Заказ №'.$order->number.' уже оплачен — отменить нельзя. Возврат денег оформляет администратор в «Кассе и складе»');
+        }
+        $this->ensureNoTerminal($order);
+    }
+
+    /** Пока оплата ждёт банковский терминал, заказ не меняется и не оплачивается иначе. */
+    private function ensureNoTerminal(Order $order, ?TerminalPayment $except = null): void
+    {
+        $pending = TerminalPayment::where('order_id', $order->id)->where('status', 'pending')
+            ->when($except, fn ($q) => $q->whereKeyNot($except->id))->exists();
+        if ($pending) {
+            $this->fail('terminal', 'Идёт оплата на терминале — дождитесь результата или отмените её на экране оплаты');
         }
     }
 

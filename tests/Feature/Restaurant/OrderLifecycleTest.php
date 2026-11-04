@@ -10,7 +10,10 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
-/** Жизненный цикл заказа: официант → кухня → готово → подано → счёт → оплата → продажи и отчёты. */
+/**
+ * Жизненный цикл заказа: официант → кухня (только показывает) → готовится → готово → подано → счёт → оплата →
+ * продажи и отчёты. Отметки статусов ставят официант, кассир и админка — экран кухни не нужен.
+ */
 class OrderLifecycleTest extends TestCase
 {
     use RefreshDatabase;
@@ -49,10 +52,14 @@ class OrderLifecycleTest extends TestCase
         $this->assertSame(['Плов чайханский', 'Чай зелёный'], array_column($card['items'], 'name'));
         $this->assertSame(15, $this->getJson('/api/restaurant/kitchen/board')->json('cook_minutes'));
 
-        // «Начать готовить» → «Готовятся», «Готово» → «Готово»
-        $this->postJson("/api/restaurant/kitchen/tickets/{$card['id']}/start")->assertOk()->assertJsonPath('order_status', 'cooking');
+        // кухня не ставит отметок: «готовится» и «готово» отмечает официант, доска кухни это показывает
+        $this->actAs($this->waiter);
+        $this->mark(['id' => $orderId], 'cooking', ['ticket_id' => $card['id']])->assertOk()->assertJsonPath('order.status', 'cooking');
+        $this->actAs($this->cook);
         $this->assertCount(1, $this->board()['cooking']);
-        $this->postJson("/api/restaurant/kitchen/tickets/{$card['id']}/ready")->assertOk()->assertJsonPath('order_status', 'ready');
+        $this->actAs($this->waiter);
+        $this->mark(['id' => $orderId], 'ready')->assertOk()->assertJsonPath('order.status', 'ready');
+        $this->actAs($this->cook);
         $this->assertCount(1, $this->board()['ready']);
 
         // официант видит готовность у себя, подаёт, выдаёт счёт
@@ -137,10 +144,8 @@ class OrderLifecycleTest extends TestCase
         $this->postJson("/api/restaurant/waiter/orders/{$order['id']}/pay", ['payment' => 'card'])
             ->assertUnprocessable()->assertJsonValidationErrors('items');
 
-        $this->actAs($this->cook);
-        $this->postJson("/api/restaurant/kitchen/tickets/{$order['tickets'][0]['id']}/ready")->assertOk();
+        $this->mark($order, 'ready')->assertOk();
 
-        $this->actAs($this->waiter);
         $this->postJson("/api/restaurant/waiter/orders/{$order['id']}/pay", ['payment' => 'cash', 'received' => 40000])
             ->assertUnprocessable()->assertJsonValidationErrors('received');
         $this->postJson("/api/restaurant/waiter/orders/{$order['id']}/pay", ['payment' => 'card'])
@@ -150,22 +155,33 @@ class OrderLifecycleTest extends TestCase
         $this->assertSame(0, Sale::sole()->change_amount);
     }
 
-    public function test_kitchen_marks_single_items_and_bumps_ready_cards(): void
+    public function test_single_items_are_marked_without_the_kitchen_screen(): void
     {
         $this->actAs($this->waiter);
         $order = $this->openOrder($this->t1, [$this->line($this->plov), $this->line($this->tea)])->json('order');
         [$plov, $tea] = $order['items'];
 
+        // отдельные позиции: чай готов раньше плова, ошибочную отметку можно вернуть
+        $this->mark($order, 'cooking', ['item_ids' => [$plov['id']]])->assertOk()->assertJsonPath('order.status', 'cooking');
+        $this->mark($order, 'ready', ['item_ids' => [$tea['id']]])->assertOk()->assertJsonPath('order.status', 'cooking');
+        $this->mark($order, 'ready', ['item_ids' => [$plov['id']]])->assertOk()->assertJsonPath('order.status', 'ready');
+        $this->mark($order, 'cooking', ['item_ids' => [$plov['id']]])->assertOk()->assertJsonPath('order.status', 'cooking');
+        $this->mark($order, 'ready', ['item_ids' => [$plov['id']]])->assertOk();
         $this->actAs($this->cook);
-        $this->postJson("/api/restaurant/kitchen/items/{$plov['id']}/status", ['status' => 'cooking'])->assertOk()->assertJsonPath('order_status', 'cooking');
-        $this->postJson("/api/restaurant/kitchen/items/{$tea['id']}/status", ['status' => 'ready'])->assertOk()->assertJsonPath('order_status', 'cooking');
-        $this->postJson("/api/restaurant/kitchen/items/{$plov['id']}/status", ['status' => 'ready'])->assertOk()->assertJsonPath('order_status', 'ready');
         $ticket = $this->board()['ready'][0];
 
-        // «Выдано» — карточка уходит с доски
-        $this->postJson("/api/restaurant/kitchen/tickets/{$ticket['id']}/served")->assertOk()->assertJsonPath('order_status', 'served');
+        // «Подано» на отправку — карточка уходит с доски кухни
+        $this->actAs($this->waiter);
+        $this->mark($order, 'served', ['ticket_id' => $ticket['id']])->assertOk()->assertJsonPath('order.status', 'served');
+        $this->actAs($this->cook);
         $this->assertSame(['new' => [], 'cooking' => [], 'ready' => []], $this->board());
-        $this->postJson("/api/restaurant/kitchen/items/{$plov['id']}/status", ['status' => 'cooking'])->assertUnprocessable();
+        // поданное назад не возвращается; повар отметок не ставит — у кухни нет таких запросов
+        $this->actAs($this->waiter);
+        $this->mark($order, 'cooking', ['item_ids' => [$plov['id']]])->assertUnprocessable();
+        $this->actAs($this->cook);
+        $this->postJson("/api/restaurant/kitchen/items/{$plov['id']}/status", ['status' => 'cooking'])->assertNotFound();
+        $this->postJson("/api/restaurant/kitchen/tickets/{$ticket['id']}/ready")->assertNotFound();
+        $this->mark($order, 'ready')->assertForbidden();
     }
 
     public function test_cancel_rules_for_waiter_and_admin(): void
@@ -180,9 +196,7 @@ class OrderLifecycleTest extends TestCase
         $this->assertSame(1, PrintJob::where('kind', 'cancel')->count());
 
         // начатую — только администратор
-        $this->actAs($this->cook);
-        $this->postJson("/api/restaurant/kitchen/tickets/{$order['tickets'][0]['id']}/start")->assertOk();
-        $this->actAs($this->waiter);
+        $this->mark($order, 'cooking')->assertOk();
         $this->postJson("/api/restaurant/waiter/orders/{$order['id']}/items/{$plov['id']}/cancel")->assertUnprocessable();
         $this->postJson("/api/restaurant/waiter/orders/{$order['id']}/cancel")->assertUnprocessable();
 

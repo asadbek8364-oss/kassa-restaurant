@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Restaurant\Admin;
 
+use App\Http\Controllers\Api\Restaurant\Concerns\OrderStatusActions;
 use App\Http\Controllers\Api\Restaurant\RestaurantController;
 use App\Models\Restaurant\Order;
 use App\Models\Restaurant\OrderItem;
@@ -17,9 +18,14 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
-/** Главный экран админки и список заказов. */
+/**
+ * Главный экран админки, список заказов и карточка заказа — с отметками «готовится / готово / подано (выдано)»
+ * и повторной печатью кухонного чека (экран кухни только показывает заказы).
+ */
 class DashboardController extends RestaurantController
 {
+    use OrderStatusActions;
+
     public function show(RestaurantReportService $reports, SyncStatus $sync): JsonResponse
     {
         $settings = Settings::current();
@@ -30,8 +36,12 @@ class DashboardController extends RestaurantController
             'today' => $reports->today(),
             'tables' => [
                 'total' => Table::where('active', true)->count(),
-                'busy' => $open->pluck('table_id')->filter()->unique()->count(),
-                'bill' => $open->whereNotNull('bill_at')->count(),
+                'busy' => $open->where('type', 'table')->pluck('table_id')->filter()->unique()->count(),
+                'bill' => $open->where('type', 'table')->whereNotNull('bill_at')->count(),
+            ],
+            'takeaway' => [
+                'open' => $open->where('type', 'takeaway')->count(),
+                'ready' => $open->where('type', 'takeaway')->where('status', 'ready')->count(),
             ],
             'kitchen' => [
                 'new' => (int) OrderItem::where('status', 'new')->sum('qty'),

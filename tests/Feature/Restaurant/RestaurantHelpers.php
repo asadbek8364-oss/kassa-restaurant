@@ -14,7 +14,7 @@ use App\Services\Restaurant\Printing\PrinterTransport;
 use Illuminate\Testing\TestResponse;
 
 /**
- * Ресторан для тестов: администратор, официант и повар, меню (плов, лагман, чай), два столика.
+ * Ресторан для тестов: администратор, официант, кассир и повар, меню (плов, лагман, чай), два столика.
  * PIN-коды — «сложные», чтобы проходили правила кассы.
  */
 trait RestaurantHelpers
@@ -26,6 +26,8 @@ trait RestaurantHelpers
     protected Employee $waiter;
 
     protected Employee $cook;
+
+    protected Employee $cashier;
 
     protected Category $hot;
 
@@ -51,6 +53,7 @@ trait RestaurantHelpers
         $this->admin = Employee::create(['name' => 'Дилшод Каримов', 'role' => 'admin', 'pin' => '5728']);
         $this->waiter = Employee::create(['name' => 'Азиз Рахимов', 'role' => 'waiter', 'pin' => '2846']);
         $this->cook = Employee::create(['name' => 'Шахзода Юсупова', 'role' => 'cook', 'pin' => '3957']);
+        $this->cashier = Employee::create(['name' => 'Малика Турсунова', 'role' => 'cashier', 'pin' => '4862']);
 
         $this->hot = Category::create(['name' => 'Горячее', 'sort' => 10]);
         $drinks = Category::create(['name' => 'Напитки', 'sort' => 20]);
@@ -85,6 +88,15 @@ trait RestaurantHelpers
     protected function line(Dish $dish, int $qty = 1, ?string $comment = null): array
     {
         return ['dish_id' => $dish->id, 'qty' => $qty, 'comment' => $comment];
+    }
+
+    /**
+     * Отметка вместо кухонного экрана (он только показывает заказы): официант, кассир или админка ставят
+     * «готовится», «готово», «подано» всему заказу, одной отправке или позициям.
+     */
+    protected function mark(array $order, string $status, array $extra = [], string $app = 'waiter'): TestResponse
+    {
+        return $this->postJson("/api/restaurant/{$app}/orders/{$order['id']}/status", ['status' => $status] + $extra);
     }
 
     /** Карточки доски кухни по колонкам: column => [card, …]. */

@@ -26,11 +26,9 @@ class AdditionalOrderTest extends TestCase
         $this->actAs($this->waiter);
         $order = $this->openOrder($this->t1, [$this->line($this->plov, 2)], ['guests' => 2])->assertCreated()->json('order');
 
-        $this->actAs($this->cook);
-        $this->postJson("/api/restaurant/kitchen/tickets/{$order['tickets'][0]['id']}/ready")->assertOk();
+        $this->mark($order, 'ready')->assertOk();
 
         // гостям выдали счёт, но они заказали ещё
-        $this->actAs($this->waiter);
         $this->postJson("/api/restaurant/waiter/orders/{$order['id']}/bill", ['print' => false])->assertOk();
         $uuid = (string) Str::uuid();
         $more = $this->postJson("/api/restaurant/waiter/orders/{$order['id']}/items", [

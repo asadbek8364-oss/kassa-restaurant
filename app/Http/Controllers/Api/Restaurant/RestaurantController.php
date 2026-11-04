@@ -39,6 +39,12 @@ abstract class RestaurantController extends KassaController
         'token' => 'sync-токен',
         'category_id' => 'категория',
         'filter' => 'фильтр',
+        'ticket_id' => 'отправка на кухню',
+        'terminal_enabled' => 'терминал',
+        'terminal_host' => 'адрес терминала',
+        'terminal_port' => 'порт терминала',
+        'terminal_test' => 'тестовый режим',
+        'result' => 'исход',
     ];
 
     protected function attributeNames(): array

@@ -13,7 +13,7 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Сотрудники ресторана: администраторы, официанты, повара и их PIN (правила PIN — как в кассе: простые запрещены).
+ * Сотрудники ресторана: администраторы, кассиры, официанты, повара и их PIN (правила PIN — как в кассе: простые запрещены).
  * Владелец общий для всех ресторанов и здесь не редактируется.
  */
 class StaffController extends RestaurantController
@@ -21,7 +21,7 @@ class StaffController extends RestaurantController
     public function index(): JsonResponse
     {
         $staff = Employee::orderByDesc('active')
-            ->orderByRaw("CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'waiter' THEN 2 WHEN 'cook' THEN 3 ELSE 4 END")
+            ->orderByRaw("CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'cashier' THEN 2 WHEN 'waiter' THEN 3 WHEN 'cook' THEN 4 ELSE 5 END")
             ->orderBy('name')->get();
 
         return response()->json(['staff' => $staff->map(fn ($e) => Presenter::staff($e))->all()]);
