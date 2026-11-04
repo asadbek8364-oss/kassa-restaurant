@@ -1,5 +1,5 @@
 /*
- * Лаунчер демо-версии: обзор, приложения официанта, кухни и админки во фреймах (по отдельности и рядом),
+ * Лаунчер демо-версии: обзор, приложения официанта, кассира, кухни и админки во фреймах (по отдельности и рядом),
  * виртуальный принтер кухни, руководство и PDF. Приложения и лаунчер работают с одними данными
  * эмулятора (assets/demo-server.js) — изменение в одном окне сразу видно в остальных.
  */
@@ -16,9 +16,11 @@
   const ICON = {
     overview: '<path d="M4 11 12 4l8 7v8a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/>',
     waiter: '<path d="M5 15a7 7 0 0 1 14 0z"/><path d="M3 18h18M12 8V6"/>',
+    cashier: '<path d="M8 9V4h8v5"/><rect x="3" y="9" width="18" height="11" rx="2"/><path d="M7 13h1M11 13h2M16 13h1M7 16.5h10"/>',
     kitchen: '<path d="M7 14c-2.4-.4-4-2.3-3.6-4.5.4-2 2.3-3.4 4.4-3.1.6-2.2 2.6-3.6 4.9-3.4 2.1.2 3.8 1.7 4.2 3.7 2-.2 3.9 1.1 4.2 3.1.4 2.2-1.2 4.1-3.6 4.4"/><path d="M7 14v6h10v-6M7 17h10"/>',
     admin: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
     together: '<rect x="2" y="5" width="9" height="14" rx="2"/><rect x="13" y="5" width="9" height="14" rx="2"/>',
+    counter: '<rect x="2" y="5" width="9" height="14" rx="2"/><rect x="13" y="5" width="9" height="14" rx="2"/><path d="M5 15h3M16 15h3"/>',
     printer: '<path d="M7 8V3h10v5"/><rect x="3" y="8" width="18" height="9" rx="2"/><path d="M7 14h10v7H7z"/>',
     guide: '<path d="M4 4h6a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H4zM20 4h-6a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h7z"/>',
   };
@@ -26,11 +28,14 @@
 
   const APPS = {
     waiter: { title: 'Официант', who: 'Азиз Рахимов', pin: D.pins.waiter, url: D.urls.waiter, icon: 'assets/icons/waiter.svg',
-      sub: 'Схема зала, заказ на столик, отправка на кухню, дозаказ, счёт и оплата',
-      points: ['Схема зала: свободен, занят, ждёт счёт', 'Заказ с комментариями «без лука», «острое»', 'Отправка на кухню одной кнопкой и дозаказ', 'Готовность с кухни, счёт, наличные или карта'] },
+      sub: 'Схема зала, заказ на столик, отправка на кухню, отметки «готовится / готово / подано», счёт и оплата',
+      points: ['Телефон 390–430 px: блюда в две колонки, заказ — в нижней панели', 'Заказ с комментариями «без лука», «острое»', 'Отметки «Готовится → Готово → Подано»', 'Счёт, наличные со сдачей или карта'] },
+    cashier: { title: 'Кассир', who: 'Малика Турсунова', pin: D.pins.cashier, url: D.urls.cashier, icon: 'assets/icons/cashier.svg',
+      sub: 'Зал, заказы навынос, оплата наличными и картой через терминал (эмулятор)',
+      points: ['Заказ навынос без столика, очередь и «Выдан»', 'Оплата заранее или при выдаче', 'Карта через терминал: ожидание и результат', 'Тестовый режим: «Гость оплатил» / «Банк отказал»'] },
     kitchen: { title: 'Кухня', who: 'Шахзода Юсупова', pin: D.pins.cook, url: D.urls.kitchen, icon: 'assets/icons/kitchen.svg',
-      sub: 'Доска «Новые → Готовятся → Готово», таймеры, звук нового заказа, стоп-лист',
-      points: ['Колонки «Новые → Готовятся → Готово»', 'Таймер по нормативу (15 минут)', 'Звук нового заказа, крупный шрифт', 'Стоп-лист и повторная печать чека'] },
+      sub: 'Настенный дисплей: «Новые → Готовятся → Готово», таймеры и просрочка — только просмотр',
+      points: ['Светлая тема, крупный шрифт — видно с 2–3 метров', 'Колонки «Новые → Готовятся → Готово»', 'Таймер и подсветка просрочки норматива', 'Никаких кнопок — отметки ставят официант и кассир'] },
     admin: { title: 'Админка', who: 'Дилшод Каримов', pin: D.pins.admin, url: D.urls.admin, icon: 'assets/icons/admin.svg',
       sub: 'Меню и стоп-лист, столики, сотрудники, отчёты, принтер и синхронизация',
       points: ['Меню, цены и стоп-лист, столики', 'Сотрудники и PIN-коды', 'Отчёты: по дням, официантам, столикам', 'Принтер кухни и синхронизация'] },
@@ -38,9 +43,11 @@
   const NAV = [
     ['overview', 'Обзор', ''],
     ['waiter', 'Официант', 'PIN ' + D.pins.waiter],
+    ['cashier', 'Кассир', 'PIN ' + D.pins.cashier],
     ['kitchen', 'Кухня', 'PIN ' + D.pins.cook],
     ['admin', 'Админка', 'PIN ' + D.pins.admin],
     ['together', 'Официант + кухня', 'заказ в реальном времени'],
+    ['counter', 'Кассир + кухня', 'навынос и терминал'],
     ['printer', 'Принтер кухни', 'виртуальный'],
     ['guide', 'Руководство', 'как пользоваться'],
   ];
@@ -65,12 +72,13 @@
     const key = (location.hash || '#overview').slice(1);
     view = NAV.some(([k]) => k === key) ? key : 'overview';
     ['overview', 'app', 'printer', 'guide'].forEach((v) => { $('#view-' + v).hidden = true; });
-    $('.ln').classList.toggle('compact', view === 'together');
+    $('.ln').classList.toggle('compact', view === 'together' || view === 'counter');
     $('#stage').innerHTML = ''; // фреймы других разделов выгружаются: в каждый момент работает один экземпляр приложения
     if (view === 'overview') overview();
     else if (view === 'printer') printer();
     else if (view === 'guide') guide();
     else if (view === 'together') together();
+    else if (view === 'counter') counter();
     else app(view);
     renderNav();
     window.scrollTo(0, 0);
@@ -84,9 +92,9 @@
     el.innerHTML = `
       <div class="ln-hero">
         <div>
-          <h1>Ресторан: официант, кухня и админка</h1>
+          <h1>Ресторан: официант, кассир, кухня и админка</h1>
           <p>Демо-версия работает прямо в браузере — без установки, регистрации и сервера. Демо-ресторан «Навруз»: 22 блюда, 8 столиков,
-          история заказов за две недели и открытые заказы в разных статусах. Всё, что вы сделаете, сохраняется только в этом браузере.</p>
+          история заказов за две недели, открытые заказы за столиками и навынос. Всё, что вы сделаете, сохраняется только в этом браузере.</p>
           <div class="ln-hero-actions">
             <a class="ln-btn ln-btn-accent" href="#together">Официант + кухня рядом</a>
             <a class="ln-btn" href="#guide">Руководство</a>
@@ -94,15 +102,15 @@
           </div>
         </div>
         <div class="ln-hero-pins">
-          ${['waiter', 'kitchen', 'admin'].map((k) => `<div class="ln-pin"><img src="${APPS[k].icon}" alt=""><div><b>${esc(APPS[k].title)}</b><span>${esc(APPS[k].who)}</span></div><code>${esc(APPS[k].pin)}</code></div>`).join('')}
+          ${['waiter', 'cashier', 'kitchen', 'admin'].map((k) => `<div class="ln-pin"><img src="${APPS[k].icon}" alt=""><div><b>${esc(APPS[k].title)}</b><span>${esc(APPS[k].who)}</span></div><code>${esc(APPS[k].pin)}</code></div>`).join('')}
         </div>
       </div>
 
       <section class="ln-section">
         <h2>Приложения</h2>
-        <p class="lead">Каждое приложение ресторана — отдельная PWA со своим адресом: /waiter, /kitchen, /admin. В лаунчере они уже открыты под демо-сотрудниками; кнопка «Выйти» внутри покажет вход по PIN.</p>
+        <p class="lead">Каждое приложение ресторана — отдельная PWA со своим адресом: /waiter, /cashier, /kitchen, /admin. В лаунчере они уже открыты под демо-сотрудниками; кнопка «Выйти» внутри покажет вход по PIN.</p>
         <div class="ln-cards">
-          ${['waiter', 'kitchen', 'admin'].map((k) => `<article class="ln-card ${k}">
+          ${['waiter', 'cashier', 'kitchen', 'admin'].map((k) => `<article class="ln-card ${k}">
             <div class="ln-card-h"><img src="${APPS[k].icon}" alt=""><div><h3>${esc(APPS[k].title)}</h3><small>${esc(APPS[k].who)} · PIN ${esc(APPS[k].pin)}</small></div></div>
             <ul>${APPS[k].points.map((p) => '<li>' + esc(p) + '</li>').join('')}</ul>
             <div class="ln-card-a"><a class="ln-btn ln-btn-accent" href="#${k}">Открыть здесь</a><a class="ln-btn" href="${APPS[k].url}" target="_blank" rel="noopener">В новой вкладке</a></div>
@@ -115,9 +123,10 @@
         <ol class="ln-steps">
           <li><b>Откройте <a href="#together">«Официант + кухня»</a></b><span>Слева — планшет официанта, справа — экран кухни, сбоку — лента принтера кухни.</span></li>
           <li><b>Официант принимает заказ</b><span>Нажмите свободный (белый) столик, выберите блюда, добавьте комментарий и нажмите «Отправить на кухню».</span></li>
-          <li><b>Кухня получает заказ</b><span>Через секунду он появится в колонке «Новые» со звуковым сигналом, а кухонный чек без цен — на ленте принтера.</span></li>
-          <li><b>Повар готовит</b><span>«Начать» → «Готово». У официанта на столике загорится зелёная отметка «Готово».</span></li>
+          <li><b>Кухня получает заказ</b><span>Через секунду карточка мягко появится в колонке «Новые» настенного экрана, а кухонный чек без цен — на ленте принтера.</span></li>
+          <li><b>Официант отмечает готовность</b><span>Экран кухни только показывает заказы: в заказе на телефоне официант нажимает «Готовится», затем «Готово» — карточка на кухне плавно переезжает в нужную колонку.</span></li>
           <li><b>Официант закрывает заказ</b><span>«Подано» → «Счёт» → «Оплата»: наличные со сдачей или карта. Столик снова свободен.</span></li>
+          <li><b>Кассир принимает заказ навынос</b><span>В <a href="#counter">«Кассир + кухня»</a>: «+ Новый заказ навынос» → блюда → «Отправить на кухню» → «Карта» → «Отправить на терминал» → «Гость оплатил» (тестовый режим) или «Банк отказал».</span></li>
           <li><b>Администратор смотрит результат</b><span>В <a href="#admin">админке</a> — выручка на главной и в отчётах, меню, стоп-лист, принтер и синхронизация.</span></li>
         </ol>
       </section>
@@ -164,13 +173,13 @@
     $('#app-title').textContent = a.title;
     $('#app-sub').textContent = a.sub + ' · вход: ' + a.who + ', PIN ' + a.pin;
     const tools = [];
-    if (key === 'waiter') tools.push('<div class="ln-seg" role="group" aria-label="Устройство"><button data-act="device" data-v="tablet" class="' + (device === 'tablet' ? 'on' : '') + '">Планшет</button><button data-act="device" data-v="phone" class="' + (device === 'phone' ? 'on' : '') + '">Телефон</button></div>');
+    if (key === 'waiter' || key === 'cashier') tools.push('<div class="ln-seg" role="group" aria-label="Устройство"><button data-act="device" data-v="tablet" class="' + (device === 'tablet' ? 'on' : '') + '">Планшет</button><button data-act="device" data-v="phone" class="' + (device === 'phone' ? 'on' : '') + '">Телефон</button></div>');
     tools.push('<button class="ln-btn ln-btn-sm" data-act="reload">Обновить</button>');
     tools.push('<a class="ln-btn ln-btn-sm" href="' + a.url + '" target="_blank" rel="noopener">В новой вкладке</a>');
     $('#app-tools').innerHTML = tools.join('');
     const stage = $('#stage');
     stage.className = 'ln-stage';
-    stage.appendChild(frame(a.url, key === 'waiter' ? device : key === 'kitchen' ? 'dark' : '', a.title));
+    stage.appendChild(frame(a.url, key === 'waiter' || key === 'cashier' ? device : key === 'kitchen' ? 'kds' : '', a.title));
   }
 
   function together() {
@@ -181,7 +190,23 @@
     const stage = $('#stage');
     stage.className = 'ln-stage ln-together';
     stage.appendChild(frame(APPS.waiter.url, 'phone', 'Официант'));
-    stage.appendChild(frame(APPS.kitchen.url, 'dark', 'Кухня'));
+    stage.appendChild(frame(APPS.kitchen.url, 'kds', 'Кухня'));
+    const panel = document.createElement('div');
+    panel.className = 'ln-tape-panel';
+    panel.innerHTML = '<h3>Принтер кухни</h3><div class="ln-tape" id="side-tape"></div>';
+    stage.appendChild(panel);
+    renderTape($('#side-tape'), 8);
+  }
+
+  function counter() {
+    $('#view-app').hidden = false;
+    $('#app-title').textContent = 'Кассир + кухня';
+    $('#app-sub').textContent = 'Кассир слева (навынос, оплата картой через эмулятор терминала), экран кухни справа: заказ навынос появляется на кухне с пометкой «Навынос».';
+    $('#app-tools').innerHTML = '<button class="ln-btn ln-btn-sm" data-act="reload">Обновить</button><a class="ln-btn ln-btn-sm" href="#printer">Все чеки принтера</a>';
+    const stage = $('#stage');
+    stage.className = 'ln-stage ln-together';
+    stage.appendChild(frame(APPS.cashier.url, 'phone', 'Кассир'));
+    stage.appendChild(frame(APPS.kitchen.url, 'kds', 'Кухня'));
     const panel = document.createElement('div');
     panel.className = 'ln-tape-panel';
     panel.innerHTML = '<h3>Принтер кухни</h3><div class="ln-tape" id="side-tape"></div>';
@@ -284,7 +309,7 @@
     if (ev.key !== D.key) return;
     renderNav();
     if (view === 'printer') printer();
-    if (view === 'together') renderTape($('#side-tape'), 8);
+    if (view === 'together' || view === 'counter') renderTape($('#side-tape'), 8);
   });
   window.addEventListener('hashchange', route);
   route();

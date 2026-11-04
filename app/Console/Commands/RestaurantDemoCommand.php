@@ -9,7 +9,7 @@ class RestaurantDemoCommand extends Command
 {
     protected $signature = 'restaurant:demo {--force : Не спрашивать подтверждение}';
 
-    protected $description = 'Ресторан: создать демо-ресторан — 22 блюда, 8 столиков, администратор, официант и повар (только при KASSA_DEMO_ENABLED=true вне production)';
+    protected $description = 'Ресторан: создать демо-ресторан — 22 блюда, 8 столиков, администратор, официант, повар и кассир, заказы за столиками и навынос (только при KASSA_DEMO_ENABLED=true вне production)';
 
     /** На рабочем сервере и без KASSA_DEMO_ENABLED=true команды нет в artisan. */
     public function isEnabled(): bool
@@ -30,7 +30,7 @@ class RestaurantDemoCommand extends Command
 
         $store = $demo->load();
         $this->info("Готово: «{$store->name}». ".RestaurantDemoService::HINT.'.');
-        $this->line('Админка: /admin · официант: /waiter · кухня: /kitchen');
+        $this->line('Админка: /admin · официант: /waiter · кассир: /cashier · кухня: /kitchen');
 
         return self::SUCCESS;
     }
