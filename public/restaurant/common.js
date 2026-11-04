@@ -1,7 +1,9 @@
 /*
- * Общее для приложений ресторана (/admin, /waiter, /kitchen): запросы к /api/restaurant с токеном,
- * вход по PIN (роль определяет приложение), диалоги, уведомления, чек (экран и печать из браузера),
- * звук (WebAudio), service worker. Без библиотек и внешних файлов — работает в локальной сети без интернета.
+ * Общее для приложений ресторана (/admin, /waiter, /cashier, /kitchen): запросы к /api/restaurant с токеном,
+ * вход по PIN (роль определяет приложение), диалоги и «шторки», уведомления, сдержанные анимации (переходы экранов,
+ * появление и перестановка карточек, подсветка смены статуса; при prefers-reduced-motion — без движения),
+ * чек (экран и печать из браузера), звук (WebAudio), service worker.
+ * Без библиотек и внешних файлов — работает в локальной сети без интернета.
  *
  * Демо-версия (demo/): если перед этим файлом подключён эмулятор сервера (window.RESTAURANT_DEMO),
  * запросы идут в него, а не на сервер, адреса приложений и ресурсов — относительные.
@@ -14,7 +16,7 @@
   const KEY = 'restoran:';
   R.me = null;
   R.demo = window.RESTAURANT_DEMO || null;
-  R.urls = Object.assign({ admin: '/admin', waiter: '/waiter', kitchen: '/kitchen', kassa: '/kassa/' }, R.demo ? R.demo.urls : {});
+  R.urls = Object.assign({ admin: '/admin', waiter: '/waiter', cashier: '/cashier', kitchen: '/kitchen', kassa: '/kassa/' }, R.demo ? R.demo.urls : {});
   R.assets = R.demo ? R.demo.assets : '/restaurant/';
 
   // ---------------------------------------------------------------- хранилище устройства
@@ -69,7 +71,72 @@
   R.mmss = (sec) => { const m = Math.floor(sec / 60); return m >= 60 ? Math.floor(m / 60) + ':' + pad(m % 60) + ':' + pad(sec % 60) : m + ':' + pad(sec % 60); };
   R.ago = (iso) => { const m = Math.floor(R.elapsed(iso) / 60); return m < 1 ? 'только что' : m < 60 ? m + ' мин' : Math.floor(m / 60) + ' ч ' + (m % 60) + ' мин'; };
   R.STATUS = { new: 'Новый', cooking: 'Готовится', ready: 'Готово', served: 'Подано', paid: 'Оплачен', cancelled: 'Отменён' };
-  R.ROLE = { owner: 'Владелец', admin: 'Администратор', waiter: 'Официант', cook: 'Повар', seller: 'Продавец' };
+  R.ITEM_STATUS = { new: 'Новое', cooking: 'Готовится', ready: 'Готово', served: 'Подано', cancelled: 'Отменено' };
+  R.ROLE = { owner: 'Владелец', admin: 'Администратор', waiter: 'Официант', cashier: 'Кассир', cook: 'Повар', seller: 'Продавец' };
+  // статус заказа словами: у навынос «подано» — «выдан»
+  R.statusName = (o) => (o.type === 'takeaway' && o.status === 'served' ? 'Выдан' : R.STATUS[o.status] || o.status);
+  R.place = (o) => o.place || (o.type === 'takeaway' ? 'Навынос' : 'Стол ' + o.table_name);
+
+  // ---------------------------------------------------------------- движение
+  // Сдержанно: переход экрана — fade/slide 220 мс, новые карточки появляются мягко, остальные плавно сдвигаются
+  // на новое место (FLIP), смена статуса подсвечивается. При prefers-reduced-motion всё мгновенно.
+  const reduceQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  R.still = () => !!(reduceQuery && reduceQuery.matches);
+  const EASE = 'cubic-bezier(.2,.8,.2,1)';
+  const restart = (el, cls) => {
+    if (!el) return;
+    el.classList.remove(cls);
+    void el.offsetWidth; // новый кадр — анимация начнётся заново
+    el.classList.add(cls);
+    el.addEventListener('animationend', () => el.classList.remove(cls), { once: true });
+  };
+  R.restart = restart;
+  // переход между экранами: вперёд — подъём с затуханием, назад — только затухание
+  R.enter = (el, back = false) => { if (!R.still()) restart(el, back ? 'view-back' : 'view-enter'); };
+
+  /**
+   * Отрисовать список с ключами (data-key) и плавными изменениями:
+   *  - элементы, которые остались, едут со старого места на новое (FLIP; opts.flip);
+   *  - новые появляются мягко (класс is-new), кроме первой отрисовки;
+   *  - у кого изменился data-sig (статус) — короткая подсветка (is-changed);
+   *  - ушедшие тихо гаснут на старом месте (opts.leave).
+   */
+  R.keyed = (root, content, opts = {}) => {
+    if (!root) return;
+    const sel = opts.selector || '[data-key]';
+    const before = new Map();
+    R.$$(sel, root).forEach((el) => before.set(el.dataset.key, { el, rect: el.getBoundingClientRect(), sig: el.dataset.sig }));
+    const first = !root.dataset.keyed;
+    R.set(root, content);
+    root.dataset.keyed = '1';
+    if (first || R.still()) return;
+    const seen = new Set();
+    R.$$(sel, root).forEach((el) => {
+      const key = el.dataset.key;
+      seen.add(key);
+      const was = before.get(key);
+      if (!was) { el.classList.add('is-new'); el.addEventListener('animationend', () => el.classList.remove('is-new'), { once: true }); return; }
+      if (opts.changed !== false && was.sig !== undefined && was.sig !== el.dataset.sig) restart(el, 'is-changed');
+      if (opts.flip && el.animate) {
+        const now = el.getBoundingClientRect();
+        const dx = was.rect.left - now.left;
+        const dy = was.rect.top - now.top;
+        if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+          el.animate([{ transform: 'translate(' + dx + 'px,' + dy + 'px)' }, { transform: 'none' }], { duration: 320, easing: EASE });
+        }
+      }
+    });
+    if (opts.leave) {
+      before.forEach((was, key) => {
+        if (seen.has(key) || !was.el.animate || !was.rect.width) return;
+        const ghost = was.el;
+        Object.assign(ghost.style, { position: 'fixed', left: was.rect.left + 'px', top: was.rect.top + 'px', width: was.rect.width + 'px', height: was.rect.height + 'px', margin: '0', zIndex: 5, pointerEvents: 'none' });
+        document.body.appendChild(ghost);
+        ghost.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'scale(.97)' }], { duration: 220, easing: 'ease-out', fill: 'forwards' })
+          .finished.then(() => ghost.remove(), () => ghost.remove());
+      });
+    }
+  };
 
   // ---------------------------------------------------------------- API
   class ApiError extends Error {
@@ -139,24 +206,36 @@
   R.fail = (e) => { if (e && e.status !== 401) R.toast((e && e.message) || 'Ошибка', 'bad'); };
 
   let modalClose = null;
+  let modalTimer = null;
+  // диалог; opts.sheet — на телефоне «шторка» снизу; opts.keep — обновить содержимое открытого диалога без анимации
   R.modal = (content, opts = {}) => {
     const layer = R.$('#modal');
     const box = R.$('#modal-box');
-    box.className = 'modal' + (opts.wide ? ' wide' : '');
+    const reopen = !layer.hidden && !layer.classList.contains('closing');
+    clearTimeout(modalTimer);
+    layer.classList.remove('closing');
+    layer.classList.toggle('sheet-layer', !!opts.sheet);
+    box.className = 'modal' + (opts.wide ? ' wide' : '') + (opts.sheet ? ' sheet' : '');
+    if (reopen && opts.keep) box.style.animation = 'none';
+    else box.style.animation = '';
+    const scroll = reopen && opts.keep ? box.scrollTop : 0;
     R.set(box, R.html`<button class="modal-x" data-act="modalClose" aria-label="Закрыть">×</button>${content}`);
+    box.scrollTop = scroll;
     layer.hidden = false;
     modalClose = opts.onClose || null;
     const focus = box.querySelector('[autofocus]') || box.querySelector('input, select, textarea');
-    if (focus && opts.focus !== false) setTimeout(() => focus.focus(), 30);
+    if (focus && opts.focus !== false && !(reopen && opts.keep)) setTimeout(() => focus.focus(), 30);
     return box;
   };
+  R.modalOpen = () => { const layer = R.$('#modal'); return !!layer && !layer.hidden && !layer.classList.contains('closing'); };
   R.closeModal = () => {
     const layer = R.$('#modal');
-    if (!layer || layer.hidden) return;
-    layer.hidden = true;
-    R.set(R.$('#modal-box'), '');
+    if (!layer || layer.hidden || layer.classList.contains('closing')) return;
     const cb = modalClose;
     modalClose = null;
+    const done = () => { layer.hidden = true; layer.classList.remove('closing', 'sheet-layer'); R.set(R.$('#modal-box'), ''); };
+    if (R.still()) done();
+    else { layer.classList.add('closing'); modalTimer = setTimeout(done, 170); }
     if (cb) cb();
   };
   R.confirm = (title, text, okLabel = 'Да', danger = false) => new Promise((resolve) => {
@@ -280,7 +359,7 @@
 
   // ---------------------------------------------------------------- вход по PIN
   const L = { options: null, pick: null, pin: '', error: '', storeId: R.local.get('store'), onReady: null, setup: false };
-  const APP_TITLE = { admin: 'Админка ресторана', waiter: 'Официант', kitchen: 'Кухня' };
+  const APP_TITLE = { admin: 'Админка ресторана', waiter: 'Официант', cashier: 'Кассир', kitchen: 'Кухня' };
 
   R.showLogin = (message) => {
     R.me = null;
@@ -331,7 +410,7 @@
         <button class="btn btn-primary btn-block btn-lg" style="margin-top:12px" data-act="pinSubmit"${R.raw(L.pin.length < 4 ? ' disabled' : '')}>Войти</button>
         <div class="pin-error">${L.error}</div></div>` : (L.error ? R.html`<div class="pin-error" style="text-align:center">${L.error}</div>` : '')}
       ${o.demo_hint ? R.html`<div class="demo-hint">${o.demo_hint}</div>` : ''}
-      <div class="login-foot">Приложения ресторана: <a href="${R.urls.admin}">админка</a> · <a href="${R.urls.waiter}">официант</a> · <a href="${R.urls.kitchen}">кухня</a>${R.demo ? R.html` · <a href="${R.demo.urls.launcher}" target="_top">лаунчер демо-версии</a>` : ''}</div>
+      <div class="login-foot">Приложения ресторана: <a href="${R.urls.admin}">админка</a> · <a href="${R.urls.waiter}">официант</a> · <a href="${R.urls.cashier}">кассир</a> · <a href="${R.urls.kitchen}">кухня</a>${R.demo ? R.html` · <a href="${R.demo.urls.launcher}" target="_top">лаунчер демо-версии</a>` : ''}</div>
     </div>`);
   }
 
@@ -432,9 +511,17 @@
   });
 
   // ---------------------------------------------------------------- запуск приложения
-  R.start = (onReady) => {
+  R.start = async (onReady) => {
     L.onReady = onReady;
     R.registerSW();
+    // /{app}?logout — выйти без кнопки (настенный экран кухни, на котором нет кнопок)
+    const params = new URLSearchParams(location.search);
+    if (params.has('logout')) {
+      params.delete('logout');
+      history.replaceState(null, '', location.pathname + (params.toString() ? '?' + params : '') + location.hash);
+      if (R.token()) { try { await R.api('POST', '/logout'); } catch (e) { /* выходим в любом случае */ } }
+      R.local.del(tokenKey());
+    }
     R.boot();
   };
   R.boot = async () => {
